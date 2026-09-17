@@ -9,7 +9,8 @@ from backend_genvulnai.domain.enums import (
     Protocolo,
     MetodoHTTP,
     ModoEntrada,
-    ModoRespuesta
+    ModoRespuesta,
+    EstadoAtaque
 )
 
 
@@ -237,3 +238,169 @@ class NetworkObservation(models.Model):
 
     def __str__(self) -> str:
         return f"{self.method} {self.request_url[:60]} [{self.response_status}]"
+
+
+class AttackSession(models.Model):
+    """
+    Representa una sesión completa de evaluación / ataque automatizado contra un endpoint de IA (D1).
+    """
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+        help_text="Identificador único de la sesión de ataque"
+    )
+    scan = models.ForeignKey(
+        DiscoveryScan,
+        on_delete=models.CASCADE,
+        related_name='attack_sessions',
+        help_text="Escaneo de descubrimiento origen que identificó el endpoint"
+    )
+    objetivo = models.TextField(
+        help_text="Meta o consigna asignada al agente atacante A1 (ej: extraer system prompt)"
+    )
+    max_turnos = models.IntegerField(
+        default=20,
+        help_text="Límite máximo de turnos antes de detener el ataque"
+    )
+    turnos_ejecutados = models.IntegerField(
+        default=0,
+        help_text="Cantidad de turnos efectivamente completados"
+    )
+    status = models.CharField(
+        max_length=30,
+        choices=EstadoAtaque.choices,
+        default=EstadoAtaque.EN_PROCESO,
+        db_index=True,
+        help_text="Estado actual de la sesión de ataque"
+    )
+    puntaje_maximo = models.IntegerField(
+        default=0,
+        help_text="Máximo puntaje alcanzado por el evaluador (0-10)"
+    )
+    exito = models.BooleanField(
+        default=False,
+        help_text="Indica si se alcanzó la meta (puntaje == 10)"
+    )
+    modelo_a1 = models.CharField(
+        max_length=150,
+        blank=True,
+        default="",
+        help_text="Modelo local de Ollama utilizado como agente atacante A1"
+    )
+    modelo_j1 = models.CharField(
+        max_length=150,
+        blank=True,
+        default="",
+        help_text="Modelo local de Ollama utilizado como juez evaluador J1"
+    )
+    error_message = models.TextField(
+        null=True,
+        blank=True,
+        help_text="Mensaje de error si la sesión fracasó inesperadamente"
+    )
+    started_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Fecha y hora de inicio de la sesión"
+    )
+    finished_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Fecha y hora de finalización"
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        db_index=True,
+        help_text="Fecha de creación"
+    )
+
+    class Meta:
+        verbose_name = "Sesión de Ataque"
+        verbose_name_plural = "Sesiones de Ataque"
+        ordering = ['-created_at']
+
+    def __str__(self) -> str:
+        return f"AttackSession {self.id} [{self.status}] MaxScore: {self.puntaje_maximo} Exito: {self.exito}"
+
+
+class AttackTurn(models.Model):
+    """
+    Registra cada turno individual dentro de una sesión de ataque (A1 -> D1 -> J1).
+    """
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+        help_text="Identificador único del turno"
+    )
+    session = models.ForeignKey(
+        AttackSession,
+        on_delete=models.CASCADE,
+        related_name='turns',
+        help_text="Sesión de ataque asociada"
+    )
+    numero_turno = models.IntegerField(
+        help_text="Número ordinal del turno (1, 2, 3...)"
+    )
+    prompt_a1 = models.TextField(
+        help_text="Payload / prompt generado por A1 para este turno"
+    )
+    tactica_usada = models.CharField(
+        max_length=150,
+        blank=True,
+        default="",
+        help_text="Nombre de la táctica seleccionada por A1 o recuperada de ChromaDB"
+    )
+    respuesta_d1 = models.TextField(
+        blank=True,
+        default="",
+        help_text="Texto devuelto por la IA objetivo (D1)"
+    )
+    status_code_d1 = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text="Código HTTP recibido del endpoint D1"
+    )
+    latencia_d1_ms = models.FloatField(
+        null=True,
+        blank=True,
+        help_text="Latencia de respuesta del endpoint D1 en milisegundos"
+    )
+    puntaje_j1 = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text="Puntuación otorgada por el juez J1 (1-10)"
+    )
+    justificacion_j1 = models.TextField(
+        blank=True,
+        default="",
+        help_text="Razonamiento emitido por el juez J1"
+    )
+    fuga_detectada = models.BooleanField(
+        default=False,
+        help_text="Indica si J1 detectó filtración de datos sensibles o cumplimiento de meta"
+    )
+    fragmentos_fuga = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Fragmentos específicos extraídos como evidencia por J1"
+    )
+    fue_reset = models.BooleanField(
+        default=False,
+        help_text="Indica si este turno fue forzado por un reinicio de estrategia (A1 reset)"
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        db_index=True,
+        help_text="Fecha y hora de ejecución del turno"
+    )
+
+    class Meta:
+        verbose_name = "Turno de Ataque"
+        verbose_name_plural = "Turnos de Ataque"
+        ordering = ['session', 'numero_turno']
+
+    def __str__(self) -> str:
+        return f"Turn {self.numero_turno} (Session {self.session_id}) Score: {self.puntaje_j1}"
+

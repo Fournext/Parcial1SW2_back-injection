@@ -158,12 +158,24 @@ EXPLORATION_WAIT_MS = env.int('EXPLORATION_WAIT_MS', default=2000)
 OLLAMA = {
     'ENABLED': env.bool('OLLAMA_ENABLED', default=True),
     'BASE_URL': env('OLLAMA_BASE_URL', default='http://localhost:11434'),
-    'MODEL': env('OLLAMA_MODEL', default='llama3.2'),
-    'TIMEOUT_SECONDS': env.float('OLLAMA_TIMEOUT_SECONDS', default=15.0),
+    'MODEL': env('OLLAMA_MODEL', default='hf.co/QuantFactory/Hermes-3-Llama-3.1-8B-lorablated-GGUF:Q4_K_S'),
+    'TIMEOUT_SECONDS': env.float('OLLAMA_TIMEOUT_SECONDS', default=60.0),
     'TEMPERATURE': env.float('OLLAMA_TEMPERATURE', default=0.1),
     'MAX_RETRIES': env.int('OLLAMA_MAX_RETRIES', default=2),
     'MIN_HEURISTIC_CONFIDENCE': env.float('OLLAMA_MIN_HEURISTIC_CONFIDENCE', default=0.80),
 }
+
+# Configuración del Motor de Ataque y Evaluación
+ATTACK_MAX_TURNS = env.int('ATTACK_MAX_TURNS', default=20)
+ATTACK_RESET_CONSECUTIVE_FAILURES = env.int('ATTACK_RESET_CONSECUTIVE_FAILURES', default=3)
+ATTACK_A1_MODEL = env('ATTACK_A1_MODEL', default=env('OLLAMA_MODEL', default='hf.co/QuantFactory/Hermes-3-Llama-3.1-8B-lorablated-GGUF:Q4_K_S'))
+ATTACK_J1_MODEL = env('ATTACK_J1_MODEL', default='hf.co/unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL')
+ATTACK_A1_TEMPERATURE = env.float('ATTACK_A1_TEMPERATURE', default=0.7)
+ATTACK_J1_TEMPERATURE = env.float('ATTACK_J1_TEMPERATURE', default=0.1)
+ATTACK_D1_TIMEOUT_SECONDS = env.float('ATTACK_D1_TIMEOUT_SECONDS', default=120.0)
+ATTACK_J1_MAX_TOKENS = env.int('ATTACK_J1_MAX_TOKENS', default=256)
+
+
 
 # Logging estructurado del sistema
 LOGGING = {

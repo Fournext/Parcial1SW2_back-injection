@@ -96,6 +96,7 @@ class OrquestadorDescubrimientoService:
             estado_exploracion: Optional[EstadoExploracion] = None
             observaciones_http = []
             observaciones_ws = []
+            cookies_sesion = {}
 
             # FASE 2: Navegación y captura de red con Playwright
             with NavegadorService() as navegador:
@@ -196,9 +197,10 @@ class OrquestadorDescubrimientoService:
                 except Exception:
                     hubo_cambio_ui = False
 
-                # Extraer observaciones antes de cerrar el navegador
+                # Extraer observaciones y cookies antes de cerrar el navegador
                 observaciones_http = capturador.obtener_observaciones_http()
                 observaciones_ws = capturador.obtener_observaciones_ws()
+                cookies_sesion = navegador.obtener_cookies()
 
             # FIN DE FASE 2: El navegador y su bucle async se han cerrado limpiamente
 
@@ -362,6 +364,9 @@ class OrquestadorDescubrimientoService:
                     "interfaz_encontrada": estado_exploracion.interfaz_encontrada if estado_exploracion else (resultado_interfaz.selector_entrada is not None if resultado_interfaz else False),
                     "elementos_probados": len(estado_exploracion.elementos_clickeados) if estado_exploracion else 0,
                     "ruta_hasta_interfaz": estado_exploracion.ruta_hasta_interfaz if estado_exploracion else []
+                },
+                "sesion_navegador": {
+                    "cookies": cookies_sesion
                 }
             }
 

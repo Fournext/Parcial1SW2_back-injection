@@ -4,15 +4,21 @@ Controladores y ViewSets para la API REST de descubrimiento de IA.
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
-from backend_genvulnai.models import DiscoveryScan
+from backend_genvulnai.models import DiscoveryScan, AttackSession, AttackTurn
 from backend_genvulnai.serializers import (
     IniciarEscaneoSerializer,
     DiscoveryScanListSerializer,
     DiscoveryScanDetailSerializer,
-    NetworkObservationSerializer
+    NetworkObservationSerializer,
+    IniciarAtaqueSerializer,
+    AttackSessionListSerializer,
+    AttackSessionDetailSerializer,
+    AttackTurnSerializer
 )
 from backend_genvulnai.repositories.descubrimiento_repository import DescubrimientoRepository
 from backend_genvulnai.services.orquestador import OrquestadorDescubrimientoService
+from backend_genvulnai.services.orquestador_ataque import OrquestadorAtaqueService
+
 
 
 class DescubrimientoViewSet(viewsets.ModelViewSet):
@@ -68,7 +74,64 @@ class DescubrimientoViewSet(viewsets.ModelViewSet):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
+class AttackSessionViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet para administrar y monitorear sesiones de ataque automatizado (red-teaming).
+    Permite iniciar un ataque (POST), listar sesiones (GET) y consultar el progreso y los turnos (GET /id/).
+    """
+    queryset = AttackSession.objects.all().prefetch_related('turns')
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return IniciarAtaqueSerializer
+        elif self.action == 'list':
+            return AttackSessionListSerializer
+        return AttackSessionDetailSerializer
+
+    def create(self, request, *args, **kwargs):
+        """
+        POST /api/ataques/
+        Inicia una nueva sesión de ataque asíncrona sobre el canal de un escaneo completado.
+        """
+        serializer = IniciarAtaqueSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        scan_id = str(serializer.validated_data['scan_id'])
+        objetivo = serializer.validated_data['objetivo']
+        max_turnos = serializer.validated_data.get('max_turnos', 20)
+
+        try:
+            sesion = OrquestadorAtaqueService.iniciar_ataque_asincrono(
+                scan_id=scan_id,
+                objetivo=objetivo,
+                max_turnos=max_turnos
+            )
+            data = {
+                "id": str(sesion.id),
+                "scan_id": str(sesion.scan_id),
+                "objetivo": sesion.objetivo,
+                "max_turnos": sesion.max_turnos,
+                "status": sesion.status,
+                "mensaje": "Sesión de ataque iniciada en segundo plano. Consulte el progreso en este mismo endpoint."
+            }
+            return Response(data, status=status.HTTP_201_CREATED)
+        except Exception as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['get'], url_path='turnos')
+    def turnos(self, request, pk=None):
+        """
+        GET /api/ataques/{id}/turnos/
+        Retorna la lista de turnos ejecutados en esta sesión.
+        """
+        sesion = self.get_object()
+        turnos = sesion.turns.all()
+        serializer = AttackTurnSerializer(turnos, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
 from rest_framework.views import APIView
+
 from backend_genvulnai.services.analizador_ia import AnalizadorIA
 
 

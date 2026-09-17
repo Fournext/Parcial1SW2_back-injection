@@ -80,6 +80,22 @@ class NavegadorService:
             raise NavegacionError("No hay una página activa disponible.")
         return self._page
 
+    def obtener_cookies(self) -> dict:
+        """Retorna las cookies del contexto actual de navegación como un diccionario {nombre: valor}."""
+        if not self._context:
+            return {}
+        try:
+            raw_cookies = self._context.cookies()
+            return {c['name']: c['value'] for c in raw_cookies}
+        except Exception as err:
+            logger.warning(f"Error al extraer cookies del contexto Playwright: {err}")
+            return {}
+
+    def obtener_contexto(self) -> Optional[BrowserContext]:
+        """Retorna el contexto del navegador Playwright."""
+        return self._context
+
+
     def cerrar(self) -> None:
         """Libera de manera segura todos los recursos del navegador."""
         try:

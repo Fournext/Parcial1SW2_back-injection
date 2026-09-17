@@ -16,6 +16,10 @@ from backend_genvulnai.services.cliente_ollama import ClienteOllama
 from backend_genvulnai.services.analizador_ia import AnalizadorIA
 from backend_genvulnai.services.explorador_dom import ExploradorDOMService
 from backend_genvulnai.services.orquestador import OrquestadorDescubrimientoService
+from backend_genvulnai.services.ejecutor_transporte import EjecutorTransporte
+from backend_genvulnai.services.agente_a1 import AgenteA1
+from backend_genvulnai.services.juez_evaluador import JuezEvaluador
+from backend_genvulnai.services.orquestador_ataque import OrquestadorAtaqueService
 
 __all__ = [
     'SanitizadorService',
@@ -33,5 +37,10 @@ __all__ = [
     'AnalizadorIA',
     'ExploradorDOMService',
     'OrquestadorDescubrimientoService',
+    'EjecutorTransporte',
+    'AgenteA1',
+    'JuezEvaluador',
+    'OrquestadorAtaqueService',
 ]
+
 

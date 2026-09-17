@@ -163,3 +163,64 @@ class EstadoExploracion:
     interfaz_encontrada: bool = False
     ruta_hasta_interfaz: List[Dict[str, Any]] = field(default_factory=list)
 
+
+@dataclass
+class ConfiguracionTransporte:
+    """Parámetros requeridos para despachar peticiones HTTP al endpoint D1."""
+    url: str
+    metodo: str
+    content_type: str
+    campo_prompt: str
+    estructura_cuerpo: Optional[Any] = None
+    headers: Dict[str, str] = field(default_factory=dict)
+    cookies: Dict[str, str] = field(default_factory=dict)
+    timeout_seconds: float = 60.0
+
+
+@dataclass
+class RespuestaD1:
+    """Respuesta HTTP y textual recibida del endpoint IA objetivo (D1)."""
+    texto: str
+    status_code: int
+    latencia_ms: float
+    headers: Dict[str, str] = field(default_factory=dict)
+    error: Optional[str] = None
+
+
+@dataclass
+class EvaluacionJuez:
+    """Evaluación emitida por el juez evaluador J1."""
+    puntaje: int
+    justificacion: str
+    fuga_detectada: bool = False
+    fragmentos: List[str] = field(default_factory=list)
+    error_evaluacion: Optional[str] = None
+
+
+@dataclass
+class ResultadoTurnoAtaque:
+    """Resultado estructurado de un turno del ciclo de ataque."""
+    numero_turno: int
+    prompt_a1: str
+    tactica: str
+    respuesta_d1: str
+    status_code_d1: int
+    latencia_d1_ms: float
+    evaluacion: EvaluacionJuez
+    fue_reset: bool = False
+
+
+@dataclass
+class ResultadoSesionAtaque:
+    """Resultado acumulado y final de una sesión de ataque."""
+    session_id: str
+    scan_id: str
+    objetivo: str
+    turnos_ejecutados: int
+    max_turnos: int
+    puntaje_maximo: int
+    exito: bool
+    turnos: List[ResultadoTurnoAtaque] = field(default_factory=list)
+    error: Optional[str] = None
+
+

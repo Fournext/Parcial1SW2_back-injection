@@ -30,3 +30,18 @@ class CanalNoDetectadoError(DescubrimientoError):
 class EscaneoTimeoutError(DescubrimientoError):
     """Lanzada cuando el proceso excede el tiempo límite establecido."""
     pass
+
+
+class AtaqueError(Exception):
+    """Excepción base para fallos en la orquestación del ataque."""
+    pass
+
+
+class TransporteError(AtaqueError):
+    """Lanzada cuando falla la comunicación HTTP con el endpoint objetivo D1."""
+    pass
+
+
+class EvaluacionError(AtaqueError):
+    """Lanzada cuando el juez evaluador falla al procesar o parsear la respuesta."""
+    pass

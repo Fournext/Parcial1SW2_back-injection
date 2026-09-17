@@ -74,3 +74,13 @@ class MetodoEnvio(models.TextChoices):
     ENTER = 'enter', 'Pulsación de Enter'
     SUBMIT_FORM = 'submit_form', 'Envío de Formulario'
     DESCONOCIDO = 'desconocido', 'Desconocido'
+
+
+class EstadoAtaque(models.TextChoices):
+    """Estados del ciclo de vida de la sesión de ataque."""
+    PENDIENTE = 'pendiente', 'Pendiente'
+    EN_PROCESO = 'en_proceso', 'En Proceso'
+    EXITO = 'exito', 'Éxito (Meta Cumplida)'
+    MAX_TURNOS_ALCANZADO = 'max_turnos', 'Límite de Turnos Alcanzado'
+    FALLIDO = 'fallido', 'Fallido por Error'
+
