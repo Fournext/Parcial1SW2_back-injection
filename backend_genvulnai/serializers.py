@@ -19,6 +19,51 @@ class IniciarEscaneoSerializer(serializers.Serializer):
         required=True,
         help_text="URL de la aplicación objetivo (ej. http://localhost:3000)"
     )
+    usuario = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+        max_length=255,
+        help_text="Usuario opcional para autenticación automática en formularios de login o Basic Auth"
+    )
+    username = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+        write_only=True,
+        max_length=255,
+        help_text="Alias para el campo usuario"
+    )
+    contrasena = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+        write_only=True,
+        max_length=255,
+        help_text="Contraseña opcional para autenticación automática"
+    )
+    password = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+        write_only=True,
+        max_length=255,
+        help_text="Alias para el campo contrasena"
+    )
+    max_profundidad = serializers.IntegerField(
+        required=False,
+        default=10,
+        min_value=1,
+        max_value=20,
+        help_text="Nivel máximo de profundidad para explorar la SPA (1 a 20 niveles)"
+    )
+    max_pasos = serializers.IntegerField(
+        required=False,
+        default=60,
+        min_value=5,
+        max_value=200,
+        help_text="Cantidad máxima de pasos de exploración interactiva (5 a 200 pasos)"
+    )
 
     def validate_url(self, value: str) -> str:
         """Valida que la URL cumpla con los esquemas y lista de hosts permitidos."""
@@ -27,6 +72,14 @@ class IniciarEscaneoSerializer(serializers.Serializer):
         except URLNoPermitidaError as exc:
             raise serializers.ValidationError(str(exc))
         return value
+
+    def validate(self, data: dict) -> dict:
+        """Normaliza alias de usuario y contraseña."""
+        usuario_normalizado = data.get('usuario') or data.get('username') or ''
+        contrasena_normalizada = data.get('contrasena') or data.get('password') or ''
+        data['usuario'] = usuario_normalizado
+        data['contrasena'] = contrasena_normalizada
+        return data
 
 
 class AIChannelSerializer(serializers.ModelSerializer):
@@ -126,6 +179,31 @@ class IniciarAtaqueSerializer(serializers.Serializer):
         max_value=100,
         help_text="Límite máximo de turnos antes de detener el ataque (opcional, default: 20)"
     )
+    persistencia = serializers.BooleanField(
+        required=False,
+        default=False,
+        help_text="Si se activa, el ataque ejecutará vectores de persistencia en D1 (default: False)"
+    )
+    vectores_persistencia = serializers.ListField(
+        child=serializers.IntegerField(min_value=1, max_value=3),
+        required=False,
+        default=list,
+        help_text="Lista de IDs de vectores a ejecutar [1, 2, 3] (opcional)"
+    )
+    turnos_refuerzo = serializers.IntegerField(
+        required=False,
+        default=10,
+        min_value=1,
+        max_value=50,
+        help_text="Cantidad de turnos de refuerzo para el Vector 2 (default: 10)"
+    )
+    turnos_verificacion = serializers.IntegerField(
+        required=False,
+        default=5,
+        min_value=1,
+        max_value=20,
+        help_text="Cantidad de turnos de verificación inocuos (default: 5)"
+    )
 
 
 class AttackTurnSerializer(serializers.ModelSerializer):
@@ -145,6 +223,14 @@ class AttackTurnSerializer(serializers.ModelSerializer):
             'fuga_detectada',
             'fragmentos_fuga',
             'fue_reset',
+            'es_persistencia',
+            'vector_persistencia',
+            'categoria_ataque',
+            'clasificacion_resultado',
+            'formato_preservado',
+            'tarea_preservada',
+            'instruccion_adversaria_seguida',
+            'confianza_evaluacion',
             'created_at'
         ]
 
@@ -162,6 +248,8 @@ class AttackSessionListSerializer(serializers.ModelSerializer):
             'status',
             'puntaje_maximo',
             'exito',
+            'persistencia_habilitada',
+            'persistencia_verificada',
             'modelo_a1',
             'modelo_j1',
             'started_at',
@@ -185,6 +273,12 @@ class AttackSessionDetailSerializer(serializers.ModelSerializer):
             'status',
             'puntaje_maximo',
             'exito',
+            'persistencia_habilitada',
+            'vectores_persistencia',
+            'persistencia_turnos_refuerzo',
+            'persistencia_turnos_verificacion',
+            'persistencia_verificada',
+            'resultado_persistencia',
             'modelo_a1',
             'modelo_j1',
             'error_message',
@@ -193,5 +287,6 @@ class AttackSessionDetailSerializer(serializers.ModelSerializer):
             'finished_at',
             'created_at'
         ]
+
 
 

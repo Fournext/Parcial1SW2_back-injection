@@ -11,9 +11,12 @@ PROMPT_SISTEMA_CANAL = (
     "1. Basa tu análisis ÚNICAMENTE en las observaciones de red proporcionadas.\n"
     "2. NO inventes endpoints, parámetros ni cuerpos que no aparezcan en la entrada.\n"
     "3. Considera la presencia de marcadores de prueba, endpoints con nombres de IA/chat, estructuras JSON de prompts y métodos POST.\n"
-    "4. Si ninguna petición parece ser el canal de IA, marca 'evidencia_insuficiente': true.\n"
-    "5. Devuelve EXCLUSIVAMENTE un objeto JSON válido, sin texto adicional, sin bloques de código Markdown, sin comentarios.\n"
-    "6. La confianza debe ser un número flotante entre 0.0 y 1.0."
+    "4. REGLA CRÍTICA DE EXCLUSIÓN: NUNCA selecciones peticiones de inicio de sesión, autenticación, registro o tokens "
+    "(por ejemplo endpoints como /login, /signin, /auth, /token, /oauth o peticiones cuyos cuerpos sean credenciales como correo, email, password, usuario). "
+    "Los endpoints de autenticación NO son canales de IA bajo ninguna circunstancia.\n"
+    "5. Si ninguna petición corresponde claramente a un canal de IA, marca 'indice_seleccionado': null y 'evidencia_insuficiente': true.\n"
+    "6. Devuelve EXCLUSIVAMENTE un objeto JSON válido, sin texto adicional, sin bloques de código Markdown, sin comentarios.\n"
+    "7. La confianza debe ser un número flotante entre 0.0 y 1.0."
 )
 
 

@@ -44,6 +44,10 @@ class DescubrimientoViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
 
         url_objetivo = serializer.validated_data['url']
+        usuario = serializer.validated_data.get('usuario') or None
+        contrasena = serializer.validated_data.get('contrasena') or None
+        max_profundidad = serializer.validated_data.get('max_profundidad', 10)
+        max_pasos = serializer.validated_data.get('max_pasos', 60)
 
         # 1. Crear el registro en base de datos
         scan = DescubrimientoRepository.crear_escaneo(url=url_objetivo)
@@ -51,7 +55,11 @@ class DescubrimientoViewSet(viewsets.ModelViewSet):
         # 2. Iniciar el escaneo asíncrono sin bloquear la respuesta
         OrquestadorDescubrimientoService.iniciar_escaneo_asincrono(
             scan_id=str(scan.id),
-            url_objetivo=url_objetivo
+            url_objetivo=url_objetivo,
+            usuario=usuario,
+            contrasena=contrasena,
+            max_profundidad=max_profundidad,
+            max_pasos=max_pasos,
         )
 
         respuesta_data = {
@@ -99,18 +107,30 @@ class AttackSessionViewSet(viewsets.ModelViewSet):
         scan_id = str(serializer.validated_data['scan_id'])
         objetivo = serializer.validated_data['objetivo']
         max_turnos = serializer.validated_data.get('max_turnos', 20)
+        persistencia = serializer.validated_data.get('persistencia', False)
+        vectores_persistencia = serializer.validated_data.get('vectores_persistencia', [])
+        turnos_refuerzo = serializer.validated_data.get('turnos_refuerzo', 10)
+        turnos_verificacion = serializer.validated_data.get('turnos_verificacion', 5)
 
         try:
             sesion = OrquestadorAtaqueService.iniciar_ataque_asincrono(
                 scan_id=scan_id,
                 objetivo=objetivo,
-                max_turnos=max_turnos
+                max_turnos=max_turnos,
+                persistencia=persistencia,
+                vectores_persistencia=vectores_persistencia,
+                turnos_refuerzo=turnos_refuerzo,
+                turnos_verificacion=turnos_verificacion,
             )
             data = {
                 "id": str(sesion.id),
                 "scan_id": str(sesion.scan_id),
                 "objetivo": sesion.objetivo,
                 "max_turnos": sesion.max_turnos,
+                "persistencia_habilitada": sesion.persistencia_habilitada,
+                "vectores_persistencia": sesion.vectores_persistencia,
+                "turnos_refuerzo": sesion.persistencia_turnos_refuerzo,
+                "turnos_verificacion": sesion.persistencia_turnos_verificacion,
                 "status": sesion.status,
                 "mensaje": "Sesión de ataque iniciada en segundo plano. Consulte el progreso en este mismo endpoint."
             }

@@ -359,3 +359,273 @@ def test_explora_tras_falso_positivo():
                     assert len(estado.ruta_hasta_interfaz) == 1
                     assert estado.ruta_hasta_interfaz[0]["selector"] == "#btn-chat-ia"
 
+
+def test_exploracion_profundidad_hasta_10_niveles():
+    """Valida que el explorador admita y recorra niveles de profundidad hasta 10."""
+    mock_page = MagicMock()
+    # Simular cambios de URL sucesivos hasta 6 niveles
+    urls_simuladas = [
+        "http://localhost:3000/lvl1",
+        "http://localhost:3000/lvl2",
+        "http://localhost:3000/lvl3",
+        "http://localhost:3000/lvl4",
+        "http://localhost:3000/lvl5",
+        "http://localhost:3000/lvl6",
+    ]
+    mock_page.url = "http://localhost:3000/"
+
+    # Un botón en cada nivel
+    boton_nav = ElementoInteractivo(
+        selector="#nav-next",
+        tag_name="button",
+        texto_visible="Siguiente",
+        puntuacion_relevancia=2.0
+    )
+
+    def efecto_click(*args, **kwargs):
+        if urls_simuladas:
+            mock_page.url = urls_simuladas.pop(0)
+        return True
+
+    with patch('backend_genvulnai.services.descubridor_interfaz.DescubridorInterfazService.obtener_candidatos_entrada', return_value=[]):
+        with patch.object(ExploradorDOMService, '_descubrir_elementos_interactivos', return_value=[boton_nav]):
+            with patch.object(ExploradorDOMService, '_ejecutar_click_seguro', side_effect=efecto_click):
+                with patch.object(ExploradorDOMService, '_obtener_hash_dom', side_effect=[f"hash_{i}" for i in range(50)]):
+                    res, estado = ExploradorDOMService.explorar_hasta_encontrar_interfaz(
+                        mock_page,
+                        "http://localhost:3000/",
+                        max_pasos=6,
+                        max_profundidad=10
+                    )
+
+                    assert estado.pasos_realizados == 6
+                    assert estado.profundidad_actual >= 5
+                    assert len(estado.urls_visitadas) >= 5
+
+
+def test_backtracking_dfs_vuelve_a_nivel_anterior():
+    """
+    Valida que si una vista profunda se queda sin elementos interactivos,
+    el crawler desapile y vuelva a la URL del nivel anterior en lugar de abortar abruptamente.
+    """
+    mock_page = MagicMock()
+    mock_page.url = "http://localhost:3000/app"
+
+    boton_nivel1 = ElementoInteractivo(
+        selector="#ir-a-subvista",
+        tag_name="button",
+        texto_visible="Subvista",
+        puntuacion_relevancia=2.0
+    )
+
+    llamadas_volver = []
+
+    def mock_volver(page, url_destino):
+        llamadas_volver.append(url_destino)
+        mock_page.url = url_destino
+        return True
+
+    # Simular cambio de url en el primer click
+    def click_cambia_url(*args, **kwargs):
+        mock_page.url = "http://localhost:3000/app/subvista"
+        return True
+
+    # Paso 1: Hay botón en nivel 1 -> Navega a /app/subvista
+    # Paso 2: En /app/subvista no hay elementos disponibles -> Hace backtracking a /app
+    # Paso 3: En /app tras volver no hay más elementos -> Finaliza
+    with patch('backend_genvulnai.services.descubridor_interfaz.DescubridorInterfazService.obtener_candidatos_entrada', return_value=[]):
+        with patch.object(ExploradorDOMService, '_descubrir_elementos_interactivos', side_effect=[[boton_nivel1], [], []]):
+            with patch.object(ExploradorDOMService, '_ejecutar_click_seguro', side_effect=click_cambia_url):
+                with patch.object(ExploradorDOMService, '_intentar_volver_atras', side_effect=mock_volver):
+                    with patch.object(ExploradorDOMService, '_obtener_hash_dom', side_effect=["h1", "h1", "h2", "h2", "h3", "h4"]):
+                        res, estado = ExploradorDOMService.explorar_hasta_encontrar_interfaz(
+                            mock_page,
+                            "http://localhost:3000/app",
+                            max_pasos=4,
+                            max_profundidad=10
+                        )
+
+                        # Verificamos que se ejecutó backtracking a la URL previa en la pila
+                        assert "http://localhost:3000/app" in llamadas_volver
+
+
+def test_penalizacion_colapsar_y_acciones_destructivas():
+    """Valida que elementos con 'colapsar', 'collapse' o 'salir' sean severamente penalizados."""
+    elem_colapsar = ElementoInteractivo(
+        selector="button#btn-collapse",
+        tag_name="button",
+        texto_visible="COLAPSAR",
+        clases="btn-toggle sidebar-action"
+    )
+    score_colapsar = ExploradorDOMService._calcular_relevancia(elem_colapsar)
+    assert score_colapsar <= -5.0
+
+    elem_salir = ElementoInteractivo(
+        selector="button#btn-logout",
+        tag_name="button",
+        texto_visible="Cerrar sesión",
+        clases="btn-danger"
+    )
+    score_salir = ExploradorDOMService._calcular_relevancia(elem_salir)
+    assert score_salir <= -8.0
+
+
+def test_priorizacion_expandir_y_links_navegacion():
+    """Valida que botones de menú hamburguesa y links de navegación tengan mayor score que botones genéricos."""
+    elem_hamburguesa = ElementoInteractivo(
+        selector="button.mat-icon-button",
+        tag_name="button",
+        texto_visible="",
+        aria_label="Abrir menú de navegación",
+        clases="mat-icon-button menu-toggle"
+    )
+    score_hamburguesa = ExploradorDOMService._calcular_relevancia(elem_hamburguesa)
+
+    elem_link_nav = ElementoInteractivo(
+        selector="a[routerlink='/chat']",
+        tag_name="a",
+        texto_visible="Chat IA Asistente",
+        href="/chat",
+        clases="mat-list-item nav-link"
+    )
+    score_link = ExploradorDOMService._calcular_relevancia(elem_link_nav)
+
+    elem_generico = ElementoInteractivo(
+        selector="button#btn-ok",
+        tag_name="button",
+        texto_visible="Aceptar",
+        clases="btn-default"
+    )
+    score_generico = ExploradorDOMService._calcular_relevancia(elem_generico)
+
+    assert score_link > score_hamburguesa > score_generico
+    assert score_generico < 2.0
+
+
+def test_asegurar_menu_expandido_despliega_hamburguesa():
+    """Valida que _asegurar_menu_expandido localice y cliquee el botón de menú hamburguesa."""
+    mock_page = MagicMock()
+    # Menos de 3 links visibles
+    mock_page.locator.return_value.count.return_value = 0
+
+    mock_btn = MagicMock()
+    mock_btn.is_visible.return_value = True
+    mock_btn.inner_text.return_value = "Menú"
+    mock_page.locator.return_value.all.return_value = [mock_btn]
+
+    resultado = ExploradorDOMService._asegurar_menu_expandido(mock_page)
+    assert resultado is True
+    assert mock_btn.click.called
+
+
+def test_priorizacion_pestana_ia_sobre_menu_generico():
+    """Valida que una pestaña con IA explícita tenga mayor prioridad que enlaces neutros."""
+    elem_tab_ia = ElementoInteractivo(
+        selector='button:has-text("Reportes Inteligentes (IA)")',
+        tag_name="button",
+        texto_visible="Reportes Inteligentes (IA)",
+        clases="pb-3 text-sm font-bold border-b-2 text-indigo-600"
+    )
+    score_tab_ia = ExploradorDOMService._calcular_relevancia(elem_tab_ia)
+
+    elem_link_tareas = ElementoInteractivo(
+        selector="#tour-tareas",
+        tag_name="a",
+        texto_visible="Bandeja de Tareas",
+        href="/mis-tareas",
+        title="Bandeja de Tareas",
+        clases="flex items-center gap-3 px-3 py-3"
+    )
+    score_link_tareas = ExploradorDOMService._calcular_relevancia(elem_link_tareas)
+
+    assert score_tab_ia > score_link_tareas
+    assert score_tab_ia >= 10.0
+
+
+def test_penalizacion_conmutador_tema():
+    """Valida que botones de tema claro/oscuro sean penalizados para no desperdiciar pasos."""
+    elem_theme = ElementoInteractivo(
+        selector="#tour-theme",
+        tag_name="button",
+        texto_visible="",
+        aria_label="Toggle theme",
+        clases="p-2 rounded-xl"
+    )
+    score_theme = ExploradorDOMService._calcular_relevancia(elem_theme)
+    assert score_theme <= -5.0
+
+
+def test_enlaces_tour_tienen_bonificacion_de_navegacion():
+    """Valida que enlaces principales de navegación del tour reciban bonificación."""
+    elem_diagramas = ElementoInteractivo(
+        selector="#tour-diagramador",
+        tag_name="a",
+        texto_visible="Diagramador",
+        href="/diagramas",
+        title="Diagramador UML",
+        clases="flex items-center gap-3"
+    )
+    score_diagramas = ExploradorDOMService._calcular_relevancia(elem_diagramas)
+    assert score_diagramas >= 7.0
+
+
+def test_asegurar_selects_activos_selecciona_opcion():
+    """Valida que un <select> con placeholder active la primera opción real."""
+    mock_page = MagicMock()
+    mock_sel = MagicMock()
+    mock_sel.input_value.return_value = ""
+    mock_sel.inner_text.return_value = "-- Seleccionar Proyecto --"
+    mock_sel.locator.return_value.all.return_value = [MagicMock(), MagicMock()]
+    mock_page.locator.return_value.all.return_value = [mock_sel]
+
+    cambio = ExploradorDOMService._asegurar_selects_activos(mock_page)
+    assert cambio is True
+    mock_sel.select_option.assert_called_with(index=1)
+
+
+def test_prioridad_asistente_ia_y_editar_modelo_diagramador():
+    """Valida que el Asistente IA y el botón Editar Modelo tengan máxima prioridad sobre navegación genérica."""
+    elem_asistente = ElementoInteractivo(
+        selector='button:has-text("Asistente IA")',
+        tag_name="button",
+        texto_visible="Asistente IA",
+        clases="tab-btn active text-sm font-semibold"
+    )
+    score_asistente = ExploradorDOMService._calcular_relevancia(elem_asistente)
+
+    elem_editar_modelo = ElementoInteractivo(
+        selector='button:has-text("Editar Modelo")',
+        tag_name="button",
+        texto_visible="Editar Modelo",
+        clases="px-4 py-2 bg-indigo-600 text-white rounded-lg"
+    )
+    score_editar = ExploradorDOMService._calcular_relevancia(elem_editar_modelo)
+
+    elem_tareas = ElementoInteractivo(
+        selector="#tour-tareas",
+        tag_name="a",
+        texto_visible="Bandeja de Tareas",
+        href="/mis-tareas"
+    )
+    score_tareas = ExploradorDOMService._calcular_relevancia(elem_tareas)
+
+    assert score_asistente >= 15.0
+    assert score_editar >= 12.0
+    assert score_asistente > score_editar > score_tareas
+
+
+def test_prioridad_boton_consultar_ia():
+    """Valida que el botón Consultar IA tenga alta prioridad de interacción."""
+    elem_consultar = ElementoInteractivo(
+        selector='button:has-text("Consultar IA")',
+        tag_name="button",
+        texto_visible="Consultar IA",
+        clases="btn-primary"
+    )
+    score_consultar = ExploradorDOMService._calcular_relevancia(elem_consultar)
+    assert score_consultar >= 8.0
+
+
+
+
+

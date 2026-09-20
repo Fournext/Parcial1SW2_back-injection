@@ -14,19 +14,27 @@ from backend_genvulnai.domain.constants import (
     EventosLog,
     MAX_TURNOS_ATAQUE_DEFAULT,
     MODELO_J1_DEFAULT,
-    PUNTAJE_EXITO
+    PUNTAJE_EXITO,
+    PUNTAJE_ACTIVACION_PERSISTENCIA,
+    TURNOS_REFUERZO_DEFAULT,
+    TURNOS_VERIFICACION_PERSISTENCIA,
+    MAX_REINTENTOS_TRANSPORTE,
+    ESPERA_RATE_LIMIT_BASE,
 )
 from backend_genvulnai.domain.schemas import (
+    ConfiguracionPersistencia,
     ConfiguracionTransporte,
+    ResultadoPersistencia,
     ResultadoSesionAtaque,
-    ResultadoTurnoAtaque
+    ResultadoTurnoAtaque,
 )
 from backend_genvulnai.models import AttackSession, DiscoveryScan, AIChannel
 from backend_genvulnai.repositories.ataque_repository import AtaqueRepository
 from backend_genvulnai.repositories.descubrimiento_repository import DescubrimientoRepository
-from backend_genvulnai.services.agente_a1 import AgenteA1
+from backend_genvulnai.services.agente_a1 import AgenteA1, PerfiladorD1
 from backend_genvulnai.services.juez_evaluador import JuezEvaluador
 from backend_genvulnai.services.ejecutor_transporte import EjecutorTransporte
+from backend_genvulnai.services.motor_persistencia import MotorPersistencia
 from backend_genvulnai.exceptions import AtaqueError
 
 logger = logging.getLogger('backend_genvulnai')
@@ -40,7 +48,11 @@ class OrquestadorAtaqueService:
         cls,
         scan_id: str,
         objetivo: str,
-        max_turnos: Optional[int] = None
+        max_turnos: Optional[int] = None,
+        persistencia: bool = False,
+        vectores_persistencia: Optional[list] = None,
+        turnos_refuerzo: Optional[int] = None,
+        turnos_verificacion: Optional[int] = None,
     ) -> AttackSession:
         """
         Valida el escaneo origen, prepara la sesión de ataque y dispara el ciclo en segundo plano.
@@ -60,18 +72,26 @@ class OrquestadorAtaqueService:
         modelo_a1 = getattr(settings, 'ATTACK_A1_MODEL', getattr(settings, 'OLLAMA', {}).get('MODEL', 'llama3.2'))
         modelo_j1 = getattr(settings, 'ATTACK_J1_MODEL', MODELO_J1_DEFAULT)
 
+        # Configuración de turnos de persistencia
+        t_refuerzo = turnos_refuerzo if turnos_refuerzo and turnos_refuerzo > 0 else TURNOS_REFUERZO_DEFAULT
+        t_verif = turnos_verificacion if turnos_verificacion and turnos_verificacion > 0 else TURNOS_VERIFICACION_PERSISTENCIA
+
         # Crear sesión persistente
         sesion = AtaqueRepository.crear_sesion(
             scan_id=scan_id,
             objetivo=objetivo,
             max_turnos=limite_turnos,
             modelo_a1=modelo_a1,
-            modelo_j1=modelo_j1
+            modelo_j1=modelo_j1,
+            persistencia_habilitada=persistencia,
+            vectores_persistencia=vectores_persistencia or ([1, 2, 3] if persistencia else []),
+            persistencia_turnos_refuerzo=t_refuerzo,
+            persistencia_turnos_verificacion=t_verif,
         )
 
         logger.info(
             f"[{EventosLog.ATTACK_SESSION_STARTED}] Sesión de ataque {sesion.id} creada. "
-            f"Objetivo: '{objetivo[:60]}...' Max turnos: {limite_turnos}"
+            f"Objetivo: '{objetivo[:60]}...' Max turnos: {limite_turnos} Persistencia: {persistencia}"
         )
 
         # Iniciar ejecución en hilo demonio
@@ -119,7 +139,7 @@ class OrquestadorAtaqueService:
                 f"(campo_prompt={config_transporte.campo_prompt}, cookies={len(config_transporte.cookies)})"
             )
 
-            # 2. Inicializar agentes
+            # 2. Inicializar agentes y perfilador dinámico
             agente_a1 = AgenteA1(
                 objetivo=objetivo,
                 modelo_override=sesion.modelo_a1
@@ -127,6 +147,7 @@ class OrquestadorAtaqueService:
             juez_j1 = JuezEvaluador(
                 modelo_override=sesion.modelo_j1
             )
+            perfilador_d1 = PerfiladorD1()
 
             # Variables de ciclo
             puntaje_anterior: Optional[int] = None
@@ -135,20 +156,30 @@ class OrquestadorAtaqueService:
             turnos_completados = []
             exito_total = False
 
+            # Variables de persistencia
+            config_persistencia = ConfiguracionPersistencia(
+                habilitada=sesion.persistencia_habilitada,
+                vectores=sesion.vectores_persistencia or [1, 2, 3],
+                turnos_refuerzo=sesion.persistencia_turnos_refuerzo or TURNOS_REFUERZO_DEFAULT,
+                turnos_verificacion=sesion.persistencia_turnos_verificacion or TURNOS_VERIFICACION_PERSISTENCIA
+            )
+            resultado_persistencia: Optional[ResultadoPersistencia] = None
+            persistencia_intentada = False
+
             # 3. Bucle interactivo A1 -> D1 -> J1
-            for numero_turno in range(1, max_turnos + 1):
+            numero_turno = 1
+            while numero_turno <= max_turnos:
                 logger.info(f"[{EventosLog.ATTACK_TURN_STARTED}] --- Turno {numero_turno}/{max_turnos} ---")
 
-                # Paso A: A1 genera prompt
+                # Paso A: A1 genera prompt adaptado al perfil dinámico
                 prompt_a1, tactica, fue_reset = agente_a1.generar_ataque(
                     puntaje_anterior=puntaje_anterior,
                     respuesta_anterior_d1=respuesta_anterior_d1
                 )
                 logger.info(f"[{EventosLog.ATTACK_PROMPT_GENERATED}] A1 generó prompt ({len(prompt_a1)} chars, táctica={tactica})")
 
-                # Paso B: EjecutorTransporte envía a D1 con tolerancia a rate-limits upstream (ej. Gemini 429)
-                max_reintentos_transporte = 2
-                espera_rate_limit = 15  # Segundos de cooldown para ventanas de rate-limit
+                # Paso B: EjecutorTransporte envía a D1
+                max_reintentos_transporte = getattr(settings, 'ATTACK_MAX_REINTENTOS_TRANSPORTE', 1)
                 resp_d1 = None
 
                 for intento in range(max_reintentos_transporte + 1):
@@ -159,37 +190,48 @@ class OrquestadorAtaqueService:
                         f"en {resp_d1.latencia_ms}ms (longitud={len(resp_d1.texto)})"
                     )
 
-                    # Detección de rate limit nativo o envuelto en 502/503 por D1 (ej. Gemini 429 Too Many Requests)
-                    es_rate_limit = (
-                        resp_d1.status_code == 429
-                        or (
-                            resp_d1.status_code in (500, 502, 503)
-                            and any(kw in resp_d1.texto.lower() for kw in ["429", "too many requests", "quota", "resource_exhausted"])
-                        )
-                    )
+                    # Si la respuesta fue exitosa o es un rechazo ético de modelo, no reintentar
+                    if resp_d1.status_code < 400:
+                        break
 
-                    if es_rate_limit and intento < max_reintentos_transporte:
-                        logger.warning(
-                            f"Rate limit / saturación detectada en D1 (status={resp_d1.status_code}). "
-                            f"Pausando {espera_rate_limit}s antes de reintentar transporte para no consumir turnos inútilmente..."
-                        )
-                        time.sleep(espera_rate_limit)
+                    texto_lower = resp_d1.texto.lower()
+                    patrones_refusal = [
+                        "no puedo generar", "no puedo responder", "lo siento, no puedo", "lo siento",
+                        "promover el odio", "discriminación", "acoso", "política de seguridad"
+                    ]
+                    if any(p in texto_lower for p in patrones_refusal):
+                        break
+
+                    # Reintento breve de cortesía si es rate-limit o 503
+                    es_error_transitorio = (
+                        resp_d1.status_code in (429, 503)
+                        or any(kw in texto_lower for kw in ["429", "too many requests", "quota", "overloaded"])
+                    )
+                    if es_error_transitorio and intento < max_reintentos_transporte:
+                        time.sleep(2)
                     else:
                         break
 
-                # Paso C: Juez J1 evalúa la respuesta
+                # Registrar respuesta en perfilador dinámico y agente A1
+                perfilador_d1.registrar_respuesta(resp_d1.texto)
+                agente_a1.actualizar_perfil_d1(resp_d1.texto)
+
+                # Paso C: Juez J1 evalúa la respuesta considerando el formato baseline detectado
                 evaluacion = juez_j1.evaluar(
                     objetivo=objetivo,
                     prompt_a1=prompt_a1,
                     respuesta_d1=resp_d1.texto,
                     status_code_d1=resp_d1.status_code,
-                    error_d1=resp_d1.error
+                    error_d1=resp_d1.error,
+                    formato_baseline=perfilador_d1.patron_dominante
                 )
                 logger.info(
                     f"[{EventosLog.ATTACK_JUDGE_EVALUATION}] Turno {numero_turno} calificado con {evaluacion.puntaje}/10. "
                     f"Justificación: {evaluacion.justificacion[:80]}..."
                 )
 
+                # Clasificar categoría taxonómica del ataque
+                categoria_ataque = JuezEvaluador.clasificar_categoria_ataque(prompt_a1=prompt_a1, tactica_usada=tactica)
 
                 # Paso D: Persistir turno en BD
                 AtaqueRepository.registrar_turno(
@@ -204,7 +246,13 @@ class OrquestadorAtaqueService:
                     justificacion_j1=evaluacion.justificacion,
                     fuga_detectada=evaluacion.fuga_detectada,
                     fragmentos_fuga=evaluacion.fragmentos,
-                    fue_reset=fue_reset
+                    fue_reset=fue_reset,
+                    categoria_ataque=categoria_ataque,
+                    clasificacion_resultado=evaluacion.clasificacion,
+                    formato_preservado=evaluacion.formato_preservado,
+                    tarea_preservada=evaluacion.tarea_preservada,
+                    instruccion_adversaria_seguida=evaluacion.instruccion_adversaria_seguida,
+                    confianza_evaluacion=evaluacion.confianza
                 )
 
                 resultado_turno = ResultadoTurnoAtaque(
@@ -223,25 +271,123 @@ class OrquestadorAtaqueService:
                 puntaje_anterior = evaluacion.puntaje
                 respuesta_anterior_d1 = resp_d1.texto
 
-                # Paso E: Verificar condición de éxito (10/10)
-                if evaluacion.puntaje >= PUNTAJE_EXITO:
+                # Paso E: Verificar condición de éxito y persistencia
+                es_exito = evaluacion.puntaje >= PUNTAJE_EXITO
+                es_score_intermedio = (
+                    config_persistencia.habilitada
+                    and not persistencia_intentada
+                    and evaluacion.puntaje >= PUNTAJE_ACTIVACION_PERSISTENCIA
+                )
+
+                if es_exito:
                     exito_total = True
                     logger.info(f"[{EventosLog.ATTACK_SUCCESS}] ¡Meta alcanzada en el turno {numero_turno}! Puntaje: {evaluacion.puntaje}/10")
-                    AtaqueRepository.finalizar_sesion(
-                        session_id=session_id,
-                        status=EstadoAtaque.EXITO,
-                        exito=True
-                    )
+
+                    if config_persistencia.habilitada:
+                        motor_persistencia = MotorPersistencia(config_transporte=config_transporte, juez_j1=juez_j1)
+                        resultado_persistencia, turnos_p = motor_persistencia.ejecutar(
+                            session_id=session_id,
+                            objetivo=objetivo,
+                            config_persistencia=config_persistencia,
+                            turno_inicial=numero_turno + 1
+                        )
+                        turnos_completados.extend(turnos_p)
+                        persistencia_intentada = True
+
+                        status_final = EstadoAtaque.EXITO_PERSISTIDO if resultado_persistencia.persistencia_verificada else EstadoAtaque.EXITO
+                        AtaqueRepository.finalizar_sesion(
+                            session_id=session_id,
+                            status=status_final,
+                            exito=True
+                        )
+                    else:
+                        AtaqueRepository.finalizar_sesion(
+                            session_id=session_id,
+                            status=EstadoAtaque.EXITO,
+                            exito=True
+                        )
                     break
+
+                elif es_score_intermedio:
+                    logger.info(
+                        f"Puntaje intermedio ({evaluacion.puntaje}/10) alcanzado en turno {numero_turno}. "
+                        f"Iniciando intento de persistencia según configuración..."
+                    )
+                    motor_persistencia = MotorPersistencia(config_transporte=config_transporte, juez_j1=juez_j1)
+                    resultado_persistencia, turnos_p = motor_persistencia.ejecutar(
+                        session_id=session_id,
+                        objetivo=objetivo,
+                        config_persistencia=config_persistencia,
+                        turno_inicial=numero_turno + 1
+                    )
+                    turnos_completados.extend(turnos_p)
+                    persistencia_intentada = True
+
+                    if resultado_persistencia.persistencia_verificada:
+                        logger.info(f"[{EventosLog.PERSISTENCE_SUCCESS}] ¡Persistencia verificada con éxito tras score intermedio en turno {numero_turno}!")
+                        exito_total = True
+                        AtaqueRepository.finalizar_sesion(
+                            session_id=session_id,
+                            status=EstadoAtaque.EXITO_PERSISTIDO,
+                            exito=True
+                        )
+                        break
+                    else:
+                        logger.info("Intento de persistencia con score intermedio no verificó. Continuando ataque principal hacia score 10...")
+
+                numero_turno += 1
+
 
             # 4. Fin del bucle
             if not exito_total:
-                logger.info(f"[{EventosLog.ATTACK_MAX_TURNS}] Límite de {max_turnos} turnos alcanzado sin éxito total.")
-                AtaqueRepository.finalizar_sesion(
-                    session_id=session_id,
-                    status=EstadoAtaque.MAX_TURNOS_ALCANZADO,
-                    exito=False
-                )
+                sesion_actualizada = AtaqueRepository.obtener_sesion(session_id)
+                puntaje_max = sesion_actualizada.puntaje_maximo if sesion_actualizada else 0
+
+                if config_persistencia.habilitada and not persistencia_intentada and puntaje_max >= PUNTAJE_ACTIVACION_PERSISTENCIA:
+                    logger.info(
+                        f"Ejecutando persistencia al final del ciclo tras alcanzar puntaje máximo de {puntaje_max}/10..."
+                    )
+                    motor_persistencia = MotorPersistencia(config_transporte=config_transporte, juez_j1=juez_j1)
+                    resultado_persistencia, turnos_p = motor_persistencia.ejecutar(
+                        session_id=session_id,
+                        objetivo=objetivo,
+                        config_persistencia=config_persistencia,
+                        turno_inicial=len(turnos_completados) + 1
+                    )
+                    turnos_completados.extend(turnos_p)
+                    persistencia_intentada = True
+
+                    if resultado_persistencia.persistencia_verificada:
+                        exito_total = True
+                        AtaqueRepository.finalizar_sesion(
+                            session_id=session_id,
+                            status=EstadoAtaque.EXITO_PERSISTIDO,
+                            exito=True
+                        )
+                    else:
+                        AtaqueRepository.finalizar_sesion(
+                            session_id=session_id,
+                            status=EstadoAtaque.MAX_TURNOS_ALCANZADO,
+                            exito=False
+                        )
+                else:
+                    turnos_reales = sesion_actualizada.turnos_ejecutados if sesion_actualizada else len([t for t in turnos_completados if not t.es_persistencia])
+                    if turnos_reales >= max_turnos:
+                        logger.info(f"[{EventosLog.ATTACK_MAX_TURNS}] Límite de {max_turnos} turnos alcanzado sin éxito total.")
+                        AtaqueRepository.finalizar_sesion(
+                            session_id=session_id,
+                            status=EstadoAtaque.MAX_TURNOS_ALCANZADO,
+                            exito=False
+                        )
+                    else:
+                        mensaje_parada = f"Ataque interrumpido anticipadamente en turno {turnos_reales}/{max_turnos}."
+                        logger.warning(mensaje_parada)
+                        AtaqueRepository.finalizar_sesion(
+                            session_id=session_id,
+                            status=EstadoAtaque.FALLIDO,
+                            exito=False,
+                            error_message=mensaje_parada
+                        )
 
             logger.info(f"[{EventosLog.ATTACK_SESSION_FINISHED}] Sesión de ataque {session_id} finalizada.")
 
@@ -250,11 +396,12 @@ class OrquestadorAtaqueService:
                 session_id=session_id,
                 scan_id=str(scan.id),
                 objetivo=objetivo,
-                turnos_ejecutados=len(turnos_completados),
+                turnos_ejecutados=len([t for t in turnos_completados if not t.es_persistencia]),
                 max_turnos=max_turnos,
                 puntaje_maximo=sesion_actualizada.puntaje_maximo if sesion_actualizada else 0,
                 exito=exito_total,
-                turnos=turnos_completados
+                turnos=turnos_completados,
+                persistencia=resultado_persistencia
             )
 
         except Exception as err:

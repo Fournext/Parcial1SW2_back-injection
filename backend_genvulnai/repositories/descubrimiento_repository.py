@@ -30,13 +30,17 @@ class DescubrimientoRepository:
         )
 
     @classmethod
-    def completar_escaneo(cls, scan_id: str, resultado: Dict[str, Any]) -> None:
+    def completar_escaneo(cls, scan_id: str, resultado: Dict[str, Any], error_message: Optional[str] = None) -> None:
         """Marca el escaneo como COMPLETADO y almacena el resultado estructurado."""
-        DiscoveryScan.objects.filter(id=scan_id).update(
-            status=EstadoEscaneo.COMPLETADO,
-            resultado=resultado,
-            finished_at=timezone.now()
-        )
+        datos_actualizacion = {
+            'status': EstadoEscaneo.COMPLETADO,
+            'resultado': resultado,
+            'finished_at': timezone.now()
+        }
+        if error_message:
+            datos_actualizacion['error_message'] = error_message
+
+        DiscoveryScan.objects.filter(id=scan_id).update(**datos_actualizacion)
 
     @classmethod
     def fallar_escaneo(cls, scan_id: str, error_msg: str) -> None:

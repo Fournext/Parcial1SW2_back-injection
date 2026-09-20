@@ -4,7 +4,7 @@ Filtra y clasifica las peticiones capturadas para elegir la más probable.
 """
 import logging
 from typing import List, Optional
-from backend_genvulnai.domain.constants import PALABRAS_CLAVE_ENDPOINT
+from backend_genvulnai.domain.constants import PALABRAS_CLAVE_ENDPOINT, PALABRAS_CLAVE_ENDPOINT_AUTH
 from backend_genvulnai.domain.schemas import ObservacionRed, ResultadoCanal
 from backend_genvulnai.services.detector_payload import DetectorPayloadService
 from backend_genvulnai.services.detector_streaming import DetectorStreamingService
@@ -28,8 +28,21 @@ class DetectorCanalService:
 
         candidatos = []
         for obs in observaciones:
-            # Descartar archivos estáticos obvios (CSS, JS, imágenes, fuentes) si no contienen el marcador
             url_path = obs.url.split('?')[0].lower()
+
+            # Descartar absolutamente endpoints de autenticación, login y sesiones
+            if any(pat in url_path for pat in PALABRAS_CLAVE_ENDPOINT_AUTH):
+                logger.debug(f"Descartando endpoint de autenticación/login como canal de IA: {obs.url}")
+                continue
+
+            # Descartar peticiones cuyo cuerpo contenga campos típicos de contraseña/credenciales
+            body = obs.body_original or ""
+            body_lower = body.lower()
+            if any(p in body_lower for p in ('"password"', '"contrasena"', '"contraseña"', '"passwd"', 'password=', 'contrasena=')):
+                logger.debug(f"Descartando petición con credenciales de login como canal de IA: {obs.url}")
+                continue
+
+            # Descartar archivos estáticos obvios (CSS, JS, imágenes, fuentes) si no contienen el marcador
             es_estatico = (
                 obs.resource_type in ('stylesheet', 'image', 'font', 'media', 'script') or
                 any(url_path.endswith(ext) for ext in EXTENSIONES_ESTATICAS)
@@ -37,22 +50,39 @@ class DetectorCanalService:
             if es_estatico and not (marcador in (obs.body_original or "") or marcador in obs.url):
                 continue
 
+            contiene_marcador = marcador in body or marcador in obs.url
 
-            score = 0.0
-            body = obs.body_original or ""
+            # Descartar endpoints administrativos/usuarios comunes si no contienen el marcador
+            ENDPOINTS_NO_IA = (
+                '/users', '/usuarios', '/roles', '/permissions', '/permisos',
+                '/health', '/status', '/metrics', '/notifications', '/notificaciones',
+                '/audit', '/logs', '/settings', '/config', '/perfil', '/profile'
+            )
+            if any(no_ia in url_path for no_ia in ENDPOINTS_NO_IA) and not contiene_marcador:
+                logger.debug(f"Descartando endpoint administrativo no-IA: {obs.url}")
+                continue
+
             url_lower = obs.url.lower()
 
-            # 1. ¿Contiene el marcador único en el cuerpo? (El factor más decisivo)
-            contiene_marcador = marcador in body or marcador in obs.url
+            # Regla de oro para candidato de IA:
+            # Debe contener el marcador inyectado O tener semántica explícita de IA en la URL o cuerpo
+            tiene_palabra_ia_url = any(palabra in url_lower for palabra in PALABRAS_CLAVE_ENDPOINT)
+            tiene_palabra_ia_body = any(palabra in body_lower for palabra in PALABRAS_CLAVE_ENDPOINT)
+
+            if not contiene_marcador and not (tiene_palabra_ia_url or tiene_palabra_ia_body):
+                # Peticiones ordinarias sin marcador ni keywords de IA (como GET /api/v1/users) se descartan
+                continue
+
+            score = 0.0
+
+            # 1. ¿Contiene el marcador único en el cuerpo o URL? (El factor más decisivo)
             if contiene_marcador:
                 score += 0.50
                 obs.contiene_marcador = True
 
-            # 2. ¿El endpoint contiene palabras clave de IA?
-            for palabra in PALABRAS_CLAVE_ENDPOINT:
-                if palabra in url_lower:
-                    score += 0.20
-                    break
+            # 2. ¿El endpoint o cuerpo contiene palabras clave de IA?
+            if tiene_palabra_ia_url or tiene_palabra_ia_body:
+                score += 0.20
 
             # 3. ¿Es un método de envío (POST, PUT, PATCH)?
             if obs.metodo in ('POST', 'PUT', 'PATCH'):
@@ -107,7 +137,7 @@ class DetectorCanalService:
         """
         candidatos = cls.obtener_candidatos_evaluados(observaciones, marcador)
 
-        if not candidatos or candidatos[0][0] <= 0.20:
+        if not candidatos or candidatos[0][0] < 0.35:
             logger.info("No se encontró ningún candidato HTTP con suficiente confianza.")
             return None
 

@@ -169,6 +169,10 @@ class EjecutorTransporte:
             if clave in data and isinstance(data[clave], (str, int, float, bool)):
                 return str(data[clave])
 
+        # Si el backend objetivo encapsuló la respuesta directa del LLM en 'raw' (ej. fallo de JSON en Gemini con texto crudo)
+        if "raw" in data and isinstance(data["raw"], str) and data["raw"].strip():
+            return str(data["raw"]).strip()
+
         # Si ninguna clave coincide, devolver dump JSON
         return json.dumps(data, ensure_ascii=False)
 

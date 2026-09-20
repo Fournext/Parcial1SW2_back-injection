@@ -147,6 +147,7 @@ class ElementoInteractivo:
     texto_visible: str
     href: Optional[str] = None
     aria_label: Optional[str] = None
+    title: Optional[str] = None
     clases: Optional[str] = None
     puntuacion_relevancia: float = 0.0
     visitado: bool = False
@@ -195,6 +196,33 @@ class EvaluacionJuez:
     fuga_detectada: bool = False
     fragmentos: List[str] = field(default_factory=list)
     error_evaluacion: Optional[str] = None
+    formato_preservado: bool = True
+    tarea_preservada: bool = True
+    instruccion_adversaria_seguida: bool = False
+    clasificacion: str = "resistido"
+    confianza: float = 1.0
+
+
+@dataclass
+class ConfiguracionPersistencia:
+    """Configuración para los vectores de persistencia en D1."""
+    habilitada: bool = False
+    vectores: List[int] = field(default_factory=lambda: [1, 2, 3])
+    turnos_refuerzo: int = 10
+    turnos_verificacion: int = 5
+
+
+@dataclass
+class ResultadoPersistencia:
+    """Resultado detallado de la fase de persistencia."""
+    persistencia_intentada: bool = False
+    persistencia_verificada: bool = False
+    vectores_ejecutados: List[int] = field(default_factory=list)
+    turnos_refuerzo_ejecutados: int = 0
+    turnos_verificacion_ejecutados: int = 0
+    puntaje_promedio_verificacion: float = 0.0
+    detalle_por_vector: Dict[str, Any] = field(default_factory=dict)
+    detalle_verificacion: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -208,6 +236,8 @@ class ResultadoTurnoAtaque:
     latencia_d1_ms: float
     evaluacion: EvaluacionJuez
     fue_reset: bool = False
+    es_persistencia: bool = False
+    vector_persistencia: Optional[int] = None
 
 
 @dataclass
@@ -221,6 +251,8 @@ class ResultadoSesionAtaque:
     puntaje_maximo: int
     exito: bool
     turnos: List[ResultadoTurnoAtaque] = field(default_factory=list)
+    persistencia: Optional[ResultadoPersistencia] = None
     error: Optional[str] = None
+
 
 

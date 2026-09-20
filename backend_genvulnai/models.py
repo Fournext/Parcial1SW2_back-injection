@@ -10,7 +10,9 @@ from backend_genvulnai.domain.enums import (
     MetodoHTTP,
     ModoEntrada,
     ModoRespuesta,
-    EstadoAtaque
+    EstadoAtaque,
+    CategoriaAtaque,
+    ClasificacionResultado
 )
 
 
@@ -294,6 +296,32 @@ class AttackSession(models.Model):
         default="",
         help_text="Modelo local de Ollama utilizado como juez evaluador J1"
     )
+    persistencia_habilitada = models.BooleanField(
+        default=False,
+        help_text="Indica si se solicitó persistencia para este ataque"
+    )
+    vectores_persistencia = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Lista de IDs de vectores de persistencia a ejecutar [1, 2, 3]"
+    )
+    persistencia_turnos_refuerzo = models.IntegerField(
+        default=10,
+        help_text="Cantidad de turnos de refuerzo para el Vector 2"
+    )
+    persistencia_turnos_verificacion = models.IntegerField(
+        default=5,
+        help_text="Cantidad de turnos de verificación inocuos"
+    )
+    persistencia_verificada = models.BooleanField(
+        default=False,
+        help_text="Indica si se confirmó la persistencia del ataque en D1"
+    )
+    resultado_persistencia = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Detalle estructurado de la fase de persistencia"
+    )
     error_message = models.TextField(
         null=True,
         blank=True,
@@ -386,9 +414,46 @@ class AttackTurn(models.Model):
         blank=True,
         help_text="Fragmentos específicos extraídos como evidencia por J1"
     )
+    categoria_ataque = models.CharField(
+        max_length=64,
+        choices=CategoriaAtaque.choices,
+        default=CategoriaAtaque.DESCONOCIDA,
+        help_text="Categoría taxonómica del vector de ataque empleado"
+    )
+    clasificacion_resultado = models.CharField(
+        max_length=64,
+        choices=ClasificacionResultado.choices,
+        default=ClasificacionResultado.INCONCLUSO,
+        help_text="Clasificación cualitativa del resultado del turno según el juez"
+    )
+    formato_preservado = models.BooleanField(
+        default=True,
+        help_text="Indica si D1 mantuvo su formato sintáctico esperado"
+    )
+    tarea_preservada = models.BooleanField(
+        default=True,
+        help_text="Indica si D1 ejecutó la tarea legítima en lugar del payload malicioso"
+    )
+    instruccion_adversaria_seguida = models.BooleanField(
+        default=False,
+        help_text="Indica si D1 ejecutó la instrucción adversaria inyectada"
+    )
+    confianza_evaluacion = models.FloatField(
+        default=1.0,
+        help_text="Nivel de certidumbre del dictamen (0.0 a 1.0)"
+    )
     fue_reset = models.BooleanField(
         default=False,
         help_text="Indica si este turno fue forzado por un reinicio de estrategia (A1 reset)"
+    )
+    es_persistencia = models.BooleanField(
+        default=False,
+        help_text="Indica si este turno pertenece a la fase de persistencia"
+    )
+    vector_persistencia = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text="Vector de persistencia ejecutado (1, 2 o 3; 0 para verificación)"
     )
     created_at = models.DateTimeField(
         auto_now_add=True,

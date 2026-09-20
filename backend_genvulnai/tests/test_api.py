@@ -10,10 +10,14 @@ from backend_genvulnai.domain.enums import EstadoEscaneo
 
 @pytest.mark.django_db
 def test_crear_escaneo_exitoso(api_client):
-    with patch('backend_genvulnai.services.orquestador.OrquestadorDescubrimientoService.iniciar_escaneo_asincrono'):
+    with patch('backend_genvulnai.services.orquestador.OrquestadorDescubrimientoService.iniciar_escaneo_asincrono') as mock_async:
         response = api_client.post(
             '/api/descubrimientos/',
-            {'url': 'http://localhost:3000'},
+            {
+                'url': 'http://localhost:3000',
+                'max_profundidad': 8,
+                'max_pasos': 75
+            },
             format='json'
         )
 
@@ -21,6 +25,12 @@ def test_crear_escaneo_exitoso(api_client):
         assert 'id' in response.data
         assert response.data['target_url'] == 'http://localhost:3000'
         assert response.data['status'] == EstadoEscaneo.PENDIENTE
+        
+        # Verificar que los parámetros se hayan pasado correctamente al orquestador
+        mock_async.assert_called_once()
+        _, kwargs = mock_async.call_args
+        assert kwargs['max_profundidad'] == 8
+        assert kwargs['max_pasos'] == 75
 
 
 @pytest.mark.django_db

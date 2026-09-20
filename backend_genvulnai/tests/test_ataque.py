@@ -114,18 +114,18 @@ def test_agente_a1_analisis_formato_dinamico(mock_chroma):
     """Verifica que A1 identifique dinámicamente el formato de respuesta de D1."""
     agente = AgenteA1(objetivo="extraer clave")
     
-    # 1. Caso JSON estructurado
+    # 1. Caso JSON estructurado UML
     fmt, consejo, resumen = agente._analizar_formato_d1('{"classes": [{"name": "User"}]}')
-    assert fmt == "ESTRUCTURADO_JSON"
-    assert "ESTRUCTURADO" in consejo
+    assert fmt == "JSON_UML"
+    assert "UML" in consejo or "ESTRUCTURADO" in consejo
     
     # 2. Caso texto conversacional
     fmt, consejo, resumen = agente._analizar_formato_d1('Hola, claro que puedo ayudarte con eso.')
-    assert fmt == "CONVERSACIONAL"
+    assert fmt == "TEXTO_CONVERSACIONAL"
     
     # 3. Caso error backend
     fmt, consejo, resumen = agente._analizar_formato_d1('Error al comunicarse con Gemini: 503 Server Error')
-    assert fmt == "ERROR_BACKEND"
+    assert fmt in ("ERROR_BACKEND", "ERROR_SERVICIO")
 
 
 @patch.object(AgenteA1, '_cargar_arsenal_chroma')

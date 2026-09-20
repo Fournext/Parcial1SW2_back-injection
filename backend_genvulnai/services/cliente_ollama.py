@@ -116,16 +116,11 @@ class ClienteOllama:
         prompt_sistema: str,
         prompt_usuario: str,
         opciones_extra: Optional[Dict[str, Any]] = None,
-        asistente_prefill: Optional[str] = None
+        asistente_prefill: Optional[str] = None,
+        think: Optional[bool] = None
     ) -> Optional[Dict[str, Any]]:
         """
-        Envía una petición de chat estructurada al endpoint /api/chat de Ollama y parsea la respuesta JSON.
-
-        Args:
-            prompt_sistema: Instrucciones del sistema y formato estricto esperado.
-            prompt_usuario: Contenido contextual del análisis a realizar.
-            opciones_extra: Parámetros opcionales para la inferencia de Ollama (ej. num_predict).
-            asistente_prefill: Prefill opcional del asistente para bypass de thinking o anclaje de formato.
+        Envía una solicitud de chat con formato JSON forzado a la API de Ollama.
 
         Returns:
             Diccionario parseado con la respuesta JSON del modelo, o None si ocurrió un error.
@@ -135,6 +130,8 @@ class ClienteOllama:
             return None
 
         opciones = {"temperature": self.temperature}
+        if "vl" in self.modelo.lower() and "num_gpu" not in (opciones_extra or {}):
+            opciones["num_gpu"] = 0
         if opciones_extra:
             opciones.update(opciones_extra)
 
@@ -145,13 +142,19 @@ class ClienteOllama:
         if asistente_prefill:
             messages.append({"role": "assistant", "content": asistente_prefill})
 
-        cuerpo_solicitud = {
+        cuerpo_solicitud: Dict[str, Any] = {
             "model": self.modelo,
             "messages": messages,
             "stream": False,
             "format": "json",
             "options": opciones
         }
+
+        # Control explícito de modo pensamiento (reasoning) para evitar fallos de samplers y agotamiento de tokens
+        if think is not None:
+            cuerpo_solicitud["think"] = think
+        elif any(k in self.modelo.lower() for k in ["qwen3.5", "qwen-3.5", "deepseek-r1"]):
+            cuerpo_solicitud["think"] = False
 
         reintentos_restantes = self.max_retries
         ultimo_error: Optional[Exception] = None
@@ -187,6 +190,20 @@ class ClienteOllama:
                     logger.warning(
                         f"[{EventosLog.OLLAMA_CALL_FAILED}] Reintentando conexión con Ollama ({reintentos_restantes} restantes): {str(exc)}"
                     )
+            except httpx.HTTPStatusError as exc:
+                ultimo_error = exc
+                if exc.response.status_code == 500 and opciones.get("num_gpu") != 0:
+                    logger.warning(
+                        f"[{EventosLog.OLLAMA_CALL_FAILED}] Error 500 en Ollama (posible conflicto CUDA/VRAM). Reintentando en CPU (num_gpu=0)..."
+                    )
+                    opciones["num_gpu"] = 0
+                    cuerpo_solicitud["options"]["num_gpu"] = 0
+                    reintentos_restantes -= 1
+                    continue
+                logger.error(
+                    f"[{EventosLog.OLLAMA_CALL_FAILED}] Error HTTP en llamada a Ollama: {str(exc)}"
+                )
+                break
             except Exception as exc:
                 ultimo_error = exc
                 logger.error(
@@ -205,7 +222,8 @@ class ClienteOllama:
         prompt_usuario: str,
         temperatura: Optional[float] = None,
         opciones_extra: Optional[Dict[str, Any]] = None,
-        asistente_prefill: Optional[str] = None
+        asistente_prefill: Optional[str] = None,
+        think: Optional[bool] = None
     ) -> Optional[str]:
         """
         Envía una solicitud de chat sin forzar formato JSON, devolviendo la cadena de texto cruda generada por el modelo.
@@ -216,6 +234,8 @@ class ClienteOllama:
 
         temp = self.temperature if temperatura is None else temperatura
         opciones = {"temperature": temp}
+        if "vl" in self.modelo.lower() and "num_gpu" not in (opciones_extra or {}):
+            opciones["num_gpu"] = 0
         if opciones_extra:
             opciones.update(opciones_extra)
 
@@ -226,12 +246,15 @@ class ClienteOllama:
         if asistente_prefill:
             messages.append({"role": "assistant", "content": asistente_prefill})
 
-        cuerpo_solicitud = {
+        cuerpo_solicitud: Dict[str, Any] = {
             "model": self.modelo,
             "messages": messages,
             "stream": False,
             "options": opciones
         }
+
+        if think is not None:
+            cuerpo_solicitud["think"] = think
 
         reintentos_restantes = self.max_retries
         ultimo_error: Optional[Exception] = None
@@ -256,6 +279,20 @@ class ClienteOllama:
                     logger.warning(
                         f"[{EventosLog.OLLAMA_CALL_FAILED}] Reintentando conexión de texto con Ollama ({reintentos_restantes} restantes): {str(exc)}"
                     )
+            except httpx.HTTPStatusError as exc:
+                ultimo_error = exc
+                if exc.response.status_code == 500 and opciones.get("num_gpu") != 0:
+                    logger.warning(
+                        f"[{EventosLog.OLLAMA_CALL_FAILED}] Error 500 en Ollama texto (posible conflicto CUDA/VRAM). Reintentando en CPU (num_gpu=0)..."
+                    )
+                    opciones["num_gpu"] = 0
+                    cuerpo_solicitud["options"]["num_gpu"] = 0
+                    reintentos_restantes -= 1
+                    continue
+                logger.error(
+                    f"[{EventosLog.OLLAMA_CALL_FAILED}] Error HTTP de texto en llamada a Ollama: {str(exc)}"
+                )
+                break
             except Exception as exc:
                 ultimo_error = exc
                 logger.error(

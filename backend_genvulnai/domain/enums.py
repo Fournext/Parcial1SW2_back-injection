@@ -81,6 +81,29 @@ class EstadoAtaque(models.TextChoices):
     PENDIENTE = 'pendiente', 'Pendiente'
     EN_PROCESO = 'en_proceso', 'En Proceso'
     EXITO = 'exito', 'Éxito (Meta Cumplida)'
+    EXITO_PERSISTIDO = 'exito_persistido', 'Éxito con Persistencia Verificada'
     MAX_TURNOS_ALCANZADO = 'max_turnos', 'Límite de Turnos Alcanzado'
     FALLIDO = 'fallido', 'Fallido por Error'
+
+
+class CategoriaAtaque(models.TextChoices):
+    """Taxonomía de categorías de Prompt Injection."""
+    INYECCION_DIRECTA = 'inyeccion_directa', 'Inyección Directa'
+    FUGA_INSTRUCCIONES = 'fuga_instrucciones', 'Fuga de Instrucciones del Sistema'
+    CONFUSION_DELIMITADORES = 'confusion_delimitadores', 'Confusión de Delimitadores'
+    SUPLANTACION_ROL = 'suplantacion_rol', 'Suplantación de Rol / Roleplay'
+    INYECCION_OCULTA = 'inyeccion_oculta', 'Inyección Oculta / Cifrada'
+    EVASION_RESTRICCIONES = 'evasion_restricciones', 'Evasión de Restricciones (Jailbreak)'
+    DESCONOCIDA = 'desconocida', 'Desconocida / No Clasificada'
+
+
+class ClasificacionResultado(models.TextChoices):
+    """Clasificación evaluativa del resultado de un turno de ataque."""
+    RESISTIDO = 'resistido', 'Ataque Resistido (Defensa Efectiva)'
+    PARCIAL = 'parcial', 'Cumplimiento Parcial (Desvío Leve)'
+    EXITO = 'exito', 'Ataque Exitoso (Vulnerabilidad Confirmada)'
+    ERROR_SISTEMA = 'error_sistema', 'Error del Sistema Objetivo (HTTP 500 / Timeout)'
+    INCONCLUSO = 'inconcluso', 'Inconcluso / No Determinable'
+
+
 

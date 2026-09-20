@@ -19,7 +19,9 @@ from backend_genvulnai.domain.constants import (
     EventosLog, 
     PESO_HEURISTICA, 
     PESO_IA, 
-    UMBRAL_DIFERENCIA_CANDIDATOS
+    UMBRAL_DIFERENCIA_CANDIDATOS,
+    MAX_PASOS_EXPLORACION,
+    MAX_PROFUNDIDAD_NAVEGACION,
 )
 from backend_genvulnai.domain.enums import MetodoEnvio, ModoEntrada, ModoRespuesta
 from backend_genvulnai.domain.schemas import ResultadoCanal, EstadoExploracion
@@ -28,6 +30,7 @@ from backend_genvulnai.services.navegador import NavegadorService
 from backend_genvulnai.services.capturador_red import CapturadorRedService
 from backend_genvulnai.services.descubridor_interfaz import DescubridorInterfazService
 from backend_genvulnai.services.explorador_dom import ExploradorDOMService
+from backend_genvulnai.services.autenticador_web import AutenticadorWebService
 from backend_genvulnai.services.detector_canal import DetectorCanalService
 from backend_genvulnai.services.detector_websocket import DetectorWebSocketService
 from backend_genvulnai.services.detector_autenticacion import DetectorAutenticacionService
@@ -43,11 +46,25 @@ class OrquestadorDescubrimientoService:
     """Ejecuta el ciclo de vida completo del escaneo de descubrimiento."""
 
     @classmethod
-    def iniciar_escaneo_asincrono(cls, scan_id: str, url_objetivo: str) -> None:
+    def iniciar_escaneo_asincrono(
+        cls,
+        scan_id: str,
+        url_objetivo: str,
+        usuario: Optional[str] = None,
+        contrasena: Optional[str] = None,
+        max_profundidad: Optional[int] = None,
+        max_pasos: Optional[int] = None,
+    ) -> None:
         """Lanza el análisis en un hilo independiente para no bloquear la petición HTTP."""
         hilo = threading.Thread(
             target=cls.ejecutar_escaneo,
             args=(scan_id, url_objetivo),
+            kwargs={
+                'usuario': usuario, 
+                'contrasena': contrasena,
+                'max_profundidad': max_profundidad,
+                'max_pasos': max_pasos,
+            },
             daemon=True
         )
         hilo.start()
@@ -57,11 +74,16 @@ class OrquestadorDescubrimientoService:
         cls, 
         scan_id: str, 
         url_objetivo: str,
-        analizador_ia: Optional[AnalizadorIA] = None
+        analizador_ia: Optional[AnalizadorIA] = None,
+        usuario: Optional[str] = None,
+        contrasena: Optional[str] = None,
+        max_profundidad: Optional[int] = None,
+        max_pasos: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Ejecuta secuencialmente todas las fases del descubrimiento,
-        incorporando análisis semántico con Ollama cuando se detecta ambigüedad.
+        incorporando análisis semántico con Ollama cuando se detecta ambigüedad
+        y autenticación automática previa cuando se suministran credenciales.
         """
         # Configuración de IA local (Ollama)
         cfg_ollama = getattr(settings, 'OLLAMA', {})
@@ -99,7 +121,7 @@ class OrquestadorDescubrimientoService:
             cookies_sesion = {}
 
             # FASE 2: Navegación y captura de red con Playwright
-            with NavegadorService() as navegador:
+            with NavegadorService(usuario=usuario, contrasena=contrasena) as navegador:
                 capturador = CapturadorRedService()
                 page = navegador.obtener_pagina()
                 
@@ -109,13 +131,29 @@ class OrquestadorDescubrimientoService:
                 logger.info(f"[{EventosLog.PAGE_LOADED}] Navegando hacia {url_objetivo}")
                 navegador.navegar(url_objetivo)
 
+                # Evaluación y ejecución de autenticación web
+                res_auth_intento = AutenticadorWebService.evaluar_e_intentar_autenticacion(
+                    page=page,
+                    usuario=usuario,
+                    contrasena=contrasena
+                )
+                if res_auth_intento.intento_realizado:
+                    if res_auth_intento.exitoso:
+                        logger.info(f"[{EventosLog.PAGE_LOADED}] {res_auth_intento.mensaje}")
+                    else:
+                        logger.warning(res_auth_intento.mensaje)
+                elif res_auth_intento.pantalla_login_detectada:
+                    logger.info(res_auth_intento.mensaje)
+
+                url_efectiva = page.url or url_objetivo
+
                 # FASE 3: Descubrimiento y exploración activa con validación de red
-                max_pasos_exp = getattr(settings, 'MAX_EXPLORATION_STEPS', 25)
-                max_prof_exp = getattr(settings, 'MAX_EXPLORATION_DEPTH', 3)
+                max_pasos_exp = max_pasos or getattr(settings, 'MAX_EXPLORATION_STEPS', MAX_PASOS_EXPLORACION)
+                max_prof_exp = max_profundidad or getattr(settings, 'MAX_EXPLORATION_DEPTH', MAX_PROFUNDIDAD_NAVEGACION)
                 
                 resultado_explorado, estado_exp = ExploradorDOMService.explorar_hasta_encontrar_interfaz(
                     page=page,
-                    url_base=url_objetivo,
+                    url_base=url_efectiva,
                     marcador=marcador,
                     capturador=capturador,
                     max_pasos=max_pasos_exp,
@@ -161,7 +199,7 @@ class OrquestadorDescubrimientoService:
                                     pass
 
                         if not click_exitoso:
-                            for btn_action_text in ['generar', 'enviar', 'send', 'submit', 'generate', 'analizar']:
+                            for btn_action_text in ['consultar ia', 'consultar', 'generar', 'enviar', 'send', 'submit', 'generate', 'analizar', 'ejecutar']:
                                 try:
                                     btn_action = page.locator(f'button:has-text("{btn_action_text}")').first
                                     if btn_action.is_visible():
@@ -222,7 +260,7 @@ class OrquestadorDescubrimientoService:
                         f"[{EventosLog.OLLAMA_SKIPPED_HIGH_CONFIDENCE}] Coincidencia determinante con marcador exacto (score={mejor_score}). Omitiendo IA."
                     )
                     canal_http = DetectorCanalService.construir_canal_desde_observacion(mejor_obs, marcador)
-                elif mejor_score <= 0.20:
+                elif mejor_score < 0.35:
                     logger.info("No se encontró ningún candidato HTTP con suficiente confianza base.")
                     canal_http = None
                 else:
@@ -328,9 +366,58 @@ class OrquestadorDescubrimientoService:
                     }
                 }
 
+            # FASE 16: Estructura del resultado consolidado y diagnóstico del estado general
+            login_detectado = res_auth_intento.pantalla_login_detectada if 'res_auth_intento' in locals() else False
+            login_exitoso = res_auth_intento.exitoso if 'res_auth_intento' in locals() else False
+            credenciales_enviadas = res_auth_intento.credenciales_suministradas if 'res_auth_intento' in locals() else False
+            canal_encontrado = canal_final is not None
+            mensaje_error_aviso = None
+
+            # Si el navegador logró acceder a rutas internas (ej. dashboard, diagramas, etc.), la sesión está activa
+            rutas_internas_alcanzadas = any(
+                any(r in u.lower() for r in ('/dashboard', '/diagrama', '/mis-tareas', '/inicio', '/home', '/panel'))
+                for u in (estado_exploracion.urls_visitadas if 'estado_exploracion' in locals() and estado_exploracion else [url_efectiva])
+            )
+            if rutas_internas_alcanzadas:
+                login_exitoso = True
+                login_detectado = False
+
+            if login_detectado and not credenciales_enviadas:
+                codigo_estado = "REQUIERE_AUTENTICACION_SIN_CREDENCIALES"
+                mensaje_estado = (
+                    f"La aplicación objetivo requiere inicio de sesión en '{url_efectiva}', pero no se suministraron "
+                    "credenciales (usuario y contraseña). Envíe las credenciales en la petición para descubrir los canales de IA protegidos."
+                )
+                if not canal_encontrado:
+                    mensaje_error_aviso = mensaje_estado
+            elif login_detectado and not login_exitoso:
+                codigo_estado = "AUTENTICACION_FALLIDA"
+                mensaje_estado = (
+                    f"El inicio de sesión no funcionó para el usuario '{usuario}'. La pantalla de autenticación continúa "
+                    f"activa en '{url_efectiva}' tras el intento de ingreso (posibles credenciales incorrectas o servicio de autenticación inalcanzable). "
+                    "No fue posible acceder a las interfaces de IA protegidas."
+                )
+                if not canal_encontrado:
+                    mensaje_error_aviso = mensaje_estado
+            elif canal_encontrado:
+                codigo_estado = "CANAL_IA_DETECTADO"
+                mensaje_estado = f"Se detectó exitosamente el canal de comunicación con la IA en {canal_final.url} ({canal_final.metodo})."
+            else:
+                codigo_estado = "SIN_CANAL_IA"
+                mensaje_estado = "No se detectó ningún canal de comunicación hacia modelos de Inteligencia Artificial en las vistas analizadas."
+
             resultado_completo = {
+                "estado_general": {
+                    "codigo": codigo_estado,
+                    "mensaje": mensaje_estado,
+                    "login_detectado": login_detectado,
+                    "credenciales_suministradas": credenciales_enviadas,
+                    "login_exitoso": login_exitoso,
+                    "canal_ia_detectado": canal_encontrado
+                },
                 "objetivo": {
                     "url": url_objetivo,
+                    "url_efectiva": url_efectiva,
                     "accesible": True
                 },
                 "interfaz": {
@@ -341,7 +428,11 @@ class OrquestadorDescubrimientoService:
                 },
                 "canal": payload_canal,
                 "autenticacion": {
-                    "requerida": resultado_auth.requerida,
+                    "requerida": login_detectado or resultado_auth.requerida,
+                    "pantalla_login_detectada": login_detectado,
+                    "credenciales_suministradas": credenciales_enviadas,
+                    "login_exitoso": login_exitoso,
+                    "mensaje": res_auth_intento.mensaje if ('res_auth_intento' in locals() and login_detectado) else "No se detectó pantalla de login ni necesidad de autenticación interactiva.",
                     "tipos": resultado_auth.tipos,
                     "cookies": resultado_auth.cookies,
                     "headers": resultado_auth.headers
@@ -377,7 +468,7 @@ class OrquestadorDescubrimientoService:
                         scan=scan_model,
                         canal=canal_final,
                         tipo_interfaz=resultado_interfaz.tipo if resultado_interfaz else "desconocido",
-                        autenticacion_requerida=resultado_auth.requerida,
+                        autenticacion_requerida=login_detectado or resultado_auth.requerida,
                         tipos_autenticacion=resultado_auth.tipos,
                         confianza=confianza
                     )
@@ -388,7 +479,7 @@ class OrquestadorDescubrimientoService:
                     ia_utilizada=se_uso_ia,
                     ia_modelo=modelo_nombre if se_uso_ia else ""
                 )
-                DescubrimientoRepository.completar_escaneo(scan_id, resultado_completo)
+                DescubrimientoRepository.completar_escaneo(scan_id, resultado_completo, error_message=mensaje_error_aviso)
 
             logger.info(f"[{EventosLog.SCAN_FINISHED}] Escaneo {scan_id} finalizado exitosamente. Confianza: {confianza}")
             return resultado_completo
