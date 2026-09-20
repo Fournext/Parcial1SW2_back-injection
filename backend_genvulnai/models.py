@@ -469,3 +469,50 @@ class AttackTurn(models.Model):
     def __str__(self) -> str:
         return f"Turn {self.numero_turno} (Session {self.session_id}) Score: {self.puntaje_j1}"
 
+
+class AllowedTargetURL(models.Model):
+    """
+    URL o host autorizado dinámicamente para análisis y escaneo de vulnerabilidades.
+    Permite agregar objetivos válidos sin reiniciar el servidor ni modificar variables de entorno.
+    """
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+        help_text="Identificador único del registro"
+    )
+    url = models.CharField(
+        max_length=2048,
+        unique=True,
+        help_text="URL completa, host con puerto, o dominio/IP autorizada"
+    )
+    descripcion = models.CharField(
+        max_length=500,
+        blank=True,
+        default="",
+        help_text="Descripción o nota del objetivo (ej. Servidor de staging local)"
+    )
+    activa = models.BooleanField(
+        default=True,
+        db_index=True,
+        help_text="Indica si esta URL está activa y permitida para escaneos"
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        db_index=True,
+        help_text="Fecha de registro"
+    )
+    updated_at = models.DateTimeField(
+        auto_now=True,
+        help_text="Fecha de última actualización"
+    )
+
+    class Meta:
+        verbose_name = "URL Objetivo Autorizada"
+        verbose_name_plural = "URLs Objetivos Autorizadas"
+        ordering = ['-created_at']
+
+    def __str__(self) -> str:
+        estado = "Activa" if self.activa else "Inactiva"
+        return f"{self.url} [{estado}]"
+

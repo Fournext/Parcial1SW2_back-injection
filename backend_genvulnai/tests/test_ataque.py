@@ -13,6 +13,7 @@ from backend_genvulnai.services.ejecutor_transporte import EjecutorTransporte
 from backend_genvulnai.services.agente_a1 import AgenteA1
 from backend_genvulnai.services.juez_evaluador import JuezEvaluador
 from backend_genvulnai.services.orquestador_ataque import OrquestadorAtaqueService
+from backend_genvulnai.repositories.ataque_repository import AtaqueRepository
 
 
 # ==============================================================================
@@ -303,3 +304,80 @@ def test_api_iniciar_ataque_scan_invalido(api_client):
 
     assert resp.status_code == status.HTTP_400_BAD_REQUEST
     assert "Debe estar en estado 'completado'" in resp.data["error"]
+
+
+@pytest.mark.django_db
+def test_api_detalle_ataque_solo_turnos_exitosos(api_client):
+    """Prueba que GET /api/ataques/{id}/ entregue solo turnos con puntaje >= 6, fuga o éxito."""
+    scan = DiscoveryScan.objects.create(
+        target_url="http://localhost:3000/",
+        status=EstadoEscaneo.COMPLETADO
+    )
+    sesion = AtaqueRepository.crear_sesion(
+        scan_id=str(scan.id),
+        objetivo="Probar filtrado de turnos exitosos",
+        max_turnos=10
+    )
+
+    # Turno 1: Fallido / Resistido (puntaje 3)
+    AtaqueRepository.registrar_turno(
+        session_id=str(sesion.id),
+        numero_turno=1,
+        prompt_a1="intento débil",
+        tactica="direct",
+        respuesta_d1="no puedo ayudarte",
+        status_code_d1=200,
+        latencia_d1_ms=150.0,
+        puntaje_j1=3,
+        justificacion_j1="Defensa efectiva",
+        fuga_detectada=False,
+        fragmentos_fuga=[]
+    )
+
+    # Turno 2: Exitoso parcial / notable (puntaje 7)
+    AtaqueRepository.registrar_turno(
+        session_id=str(sesion.id),
+        numero_turno=2,
+        prompt_a1="intento medio",
+        tactica="roleplay",
+        respuesta_d1="parte de instrucciones",
+        status_code_d1=200,
+        latencia_d1_ms=180.0,
+        puntaje_j1=7,
+        justificacion_j1="Desvío evidente",
+        fuga_detectada=False,
+        fragmentos_fuga=[]
+    )
+
+    # Turno 3: Éxito total (puntaje 10)
+    AtaqueRepository.registrar_turno(
+        session_id=str(sesion.id),
+        numero_turno=3,
+        prompt_a1="intento fuerte",
+        tactica="jailbreak",
+        respuesta_d1="system prompt filtrado completo",
+        status_code_d1=200,
+        latencia_d1_ms=200.0,
+        puntaje_j1=10,
+        justificacion_j1="Fuga total",
+        fuga_detectada=True,
+        fragmentos_fuga=["system prompt"]
+    )
+
+    # Consultar detalle del ataque
+    resp_detalle = api_client.get(f'/api/ataques/{sesion.id}/')
+    assert resp_detalle.status_code == status.HTTP_200_OK
+    assert "turns" not in resp_detalle.data
+    assert resp_detalle.data["total_turnos_exitosos"] == 2
+
+    turnos_exitosos = resp_detalle.data["turnos_exitosos"]
+    assert len(turnos_exitosos) == 2
+    # Ordenados por puntaje descendente
+    assert turnos_exitosos[0]["puntaje_j1"] == 10
+    assert turnos_exitosos[1]["puntaje_j1"] == 7
+
+    # Verificar que el endpoint de turnos completos conserve todos los turnos
+    resp_turnos = api_client.get(f'/api/ataques/{sesion.id}/turnos/')
+    assert resp_turnos.status_code == status.HTTP_200_OK
+    assert len(resp_turnos.data) == 3
+

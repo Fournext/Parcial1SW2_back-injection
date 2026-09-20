@@ -17,8 +17,8 @@ class ValidadorURLService:
     @classmethod
     def obtener_hosts_permitidos(cls) -> List[str]:
         """
-        Obtiene la lista consolidada de URLs y hosts autorizados desde settings.
-        Lee ALLOWED_TARGET_URLS y ALLOWED_TARGET_HOSTS desde las variables de entorno.
+        Obtiene la lista consolidada de URLs y hosts autorizados desde settings y base de datos.
+        Lee ALLOWED_TARGET_URLS y ALLOWED_TARGET_HOSTS de settings y suma los registros de AllowedTargetURL (activa=True).
         """
         entradas: List[str] = []
         for clave in ('ALLOWED_TARGET_URLS', 'ALLOWED_TARGET_HOSTS'):
@@ -28,10 +28,22 @@ class ValidadorURLService:
             elif isinstance(valor, (list, tuple, set)):
                 entradas.extend([str(item).strip() for item in valor if str(item).strip()])
 
+        # Consultar objetivos autorizados dinámicamente en la base de datos
+        try:
+            from backend_genvulnai.models import AllowedTargetURL
+            db_urls = AllowedTargetURL.objects.filter(activa=True).values_list('url', flat=True)
+            for item in db_urls:
+                if item and str(item).strip():
+                    entradas.append(str(item).strip())
+        except Exception:
+            # En caso de que la tabla aún no exista o haya problemas de conexión
+            pass
+
         if not entradas:
             entradas = ['localhost', '127.0.0.1']
 
         return [e.lower() for e in entradas]
+
 
     @classmethod
     def validar_url(cls, url: str) -> Tuple[bool, str]:

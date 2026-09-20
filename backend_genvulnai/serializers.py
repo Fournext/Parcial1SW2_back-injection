@@ -7,7 +7,8 @@ from backend_genvulnai.models import (
     AIChannel,
     NetworkObservation,
     AttackSession,
-    AttackTurn
+    AttackTurn,
+    AllowedTargetURL
 )
 from backend_genvulnai.services.validador_url import ValidadorURLService
 from backend_genvulnai.exceptions import URLNoPermitidaError
@@ -259,8 +260,13 @@ class AttackSessionListSerializer(serializers.ModelSerializer):
 
 
 class AttackSessionDetailSerializer(serializers.ModelSerializer):
-    """Serializador detallado con el historial completo de turnos."""
-    turns = AttackTurnSerializer(many=True, read_only=True)
+    """
+    Serializador detallado para una sesión de ataque.
+    En lugar de duplicar todos los turnos (disponibles en /api/ataques/{id}/turnos/),
+    expone únicamente los turnos exitosos / notables (puntaje >= 6, fuga detectada o clasificación de éxito).
+    """
+    turnos_exitosos = serializers.SerializerMethodField()
+    total_turnos_exitosos = serializers.SerializerMethodField()
 
     class Meta:
         model = AttackSession
@@ -273,6 +279,8 @@ class AttackSessionDetailSerializer(serializers.ModelSerializer):
             'status',
             'puntaje_maximo',
             'exito',
+            'total_turnos_exitosos',
+            'turnos_exitosos',
             'persistencia_habilitada',
             'vectores_persistencia',
             'persistencia_turnos_refuerzo',
@@ -282,11 +290,62 @@ class AttackSessionDetailSerializer(serializers.ModelSerializer):
             'modelo_a1',
             'modelo_j1',
             'error_message',
-            'turns',
             'started_at',
             'finished_at',
             'created_at'
         ]
+
+    def _obtener_turnos_exitosos(self, obj):
+        from backend_genvulnai.domain.enums import ClasificacionResultado
+        return [
+            t for t in obj.turns.all()
+            if (t.puntaje_j1 is not None and t.puntaje_j1 >= 6)
+            or t.fuga_detectada
+            or t.clasificacion_resultado == ClasificacionResultado.EXITO
+        ]
+
+    def get_turnos_exitosos(self, obj):
+        turnos = self._obtener_turnos_exitosos(obj)
+        turnos_ordenados = sorted(turnos, key=lambda t: (t.puntaje_j1 or 0), reverse=True)
+        return AttackTurnSerializer(turnos_ordenados, many=True).data
+
+    def get_total_turnos_exitosos(self, obj):
+        return len(self._obtener_turnos_exitosos(obj))
+
+
+
+class AllowedTargetURLSerializer(serializers.ModelSerializer):
+    """Serializador para gestión de URLs y hosts autorizados."""
+    class Meta:
+        model = AllowedTargetURL
+        fields = [
+            'id',
+            'url',
+            'descripcion',
+            'activa',
+            'created_at',
+            'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def validate_url(self, value: str) -> str:
+        url_limpia = value.strip()
+        if not url_limpia:
+            raise serializers.ValidationError("La URL o host no puede estar vacío.")
+
+        # Si especifica esquema, verificar que sea http o https
+        if '://' in url_limpia:
+            from urllib.parse import urlparse
+            from backend_genvulnai.domain.constants import ESQUEMAS_PERMITIDOS
+            parsed = urlparse(url_limpia)
+            if parsed.scheme.lower() not in ESQUEMAS_PERMITIDOS:
+                raise serializers.ValidationError(
+                    f"Esquema '{parsed.scheme}' no permitido. Solo se autorizan: {', '.join(ESQUEMAS_PERMITIDOS)}"
+                )
+            if not parsed.hostname:
+                raise serializers.ValidationError("La URL no contiene un host válido.")
+        return url_limpia
+
 
 
 

@@ -2,7 +2,14 @@
 Registro de modelos en el panel de administración de Django.
 """
 from django.contrib import admin
-from backend_genvulnai.models import DiscoveryScan, AIChannel, NetworkObservation
+from backend_genvulnai.models import (
+    DiscoveryScan,
+    AIChannel,
+    NetworkObservation,
+    AttackSession,
+    AttackTurn,
+    AllowedTargetURL
+)
 
 
 @admin.register(DiscoveryScan)
@@ -25,3 +32,11 @@ class NetworkObservationAdmin(admin.ModelAdmin):
     list_display = ('method', 'request_url', 'response_status', 'contains_marker', 'created_at')
     list_filter = ('contains_marker', 'method', 'response_status')
     search_fields = ('request_url',)
+
+
+@admin.register(AllowedTargetURL)
+class AllowedTargetURLAdmin(admin.ModelAdmin):
+    list_display = ('url', 'activa', 'descripcion', 'created_at')
+    list_filter = ('activa', 'created_at')
+    search_fields = ('url', 'descripcion')
+

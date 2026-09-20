@@ -4,7 +4,12 @@ Controladores y ViewSets para la API REST de descubrimiento de IA.
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
-from backend_genvulnai.models import DiscoveryScan, AttackSession, AttackTurn
+from backend_genvulnai.models import (
+    DiscoveryScan,
+    AttackSession,
+    AttackTurn,
+    AllowedTargetURL
+)
 from backend_genvulnai.serializers import (
     IniciarEscaneoSerializer,
     DiscoveryScanListSerializer,
@@ -13,7 +18,8 @@ from backend_genvulnai.serializers import (
     IniciarAtaqueSerializer,
     AttackSessionListSerializer,
     AttackSessionDetailSerializer,
-    AttackTurnSerializer
+    AttackTurnSerializer,
+    AllowedTargetURLSerializer
 )
 from backend_genvulnai.repositories.descubrimiento_repository import DescubrimientoRepository
 from backend_genvulnai.services.orquestador import OrquestadorDescubrimientoService
@@ -173,4 +179,31 @@ class OllamaHealthView(APIView):
         }
         status_code = status.HTTP_200_OK if estado.disponible else status.HTTP_503_SERVICE_UNAVAILABLE
         return Response(datos, status=status_code)
+
+
+class AllowedTargetURLViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet para administrar dinámicamente las URLs y hosts objetivos autorizados.
+    Permite crear (POST), listar (GET), actualizar (PUT/PATCH) y eliminar (DELETE) destinos.
+    """
+    queryset = AllowedTargetURL.objects.all()
+    serializer_class = AllowedTargetURLSerializer
+
+    @action(detail=False, methods=['get'], url_path='efectivas')
+    def efectivas(self, request):
+        """
+        GET /api/urls-autorizadas/efectivas/
+        Retorna la lista consolidada de todas las URLs y hosts permitidos actualmente por el sistema,
+        combinando variables de entorno (.env) y los registros activos en la base de datos.
+        """
+        from backend_genvulnai.services.validador_url import ValidadorURLService
+        hosts_permitidos = ValidadorURLService.obtener_hosts_permitidos()
+        db_urls = list(AllowedTargetURL.objects.filter(activa=True).values('id', 'url', 'descripcion', 'created_at'))
+
+        return Response({
+            "total_efectivos": len(hosts_permitidos),
+            "hosts_y_urls_permitidos": hosts_permitidos,
+            "origen_base_datos": db_urls,
+        }, status=status.HTTP_200_OK)
+
 
