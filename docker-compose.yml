@@ -34,7 +34,7 @@ services:
       DISCOVERY_TIMEOUT_SECONDS: "30"
       MAX_CAPTURED_REQUESTS: "500"
     ports:
-      - "8000:8000"
+      - "8001:8000"
     volumes:
       - .:/app
     command: >
