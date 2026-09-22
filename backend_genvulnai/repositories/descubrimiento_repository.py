@@ -13,10 +13,11 @@ class DescubrimientoRepository:
     """Encapsula las operaciones del ORM para garantizar persistencia limpia y atómica."""
 
     @classmethod
-    def crear_escaneo(cls, url: str) -> DiscoveryScan:
+    def crear_escaneo(cls, url: str, software_id: Optional[int] = None) -> DiscoveryScan:
         """Crea un registro de escaneo inicial en estado PENDIENTE."""
         return DiscoveryScan.objects.create(
             target_url=url,
+            software_id=software_id,
             status=EstadoEscaneo.PENDIENTE
         )
 

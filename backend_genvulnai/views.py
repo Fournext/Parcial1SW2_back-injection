@@ -12,6 +12,7 @@ from backend_genvulnai.models import (
 )
 from backend_genvulnai.serializers import (
     IniciarEscaneoSerializer,
+    AIChannelSerializer,
     DiscoveryScanListSerializer,
     DiscoveryScanDetailSerializer,
     NetworkObservationSerializer,
@@ -32,7 +33,16 @@ class DescubrimientoViewSet(viewsets.ModelViewSet):
     ViewSet principal para administrar escaneos de aplicaciones con IA.
     Permite crear análisis, consultar su progreso y obtener detalles de red y canales.
     """
-    queryset = DiscoveryScan.objects.all().select_related('ai_channel').prefetch_related('observations')
+    def get_queryset(self):
+        """Permite filtrar escaneos por software_id vía parámetro de consulta (?software_id=X)."""
+        qs = DiscoveryScan.objects.all().select_related('ai_channel').prefetch_related('observations')
+        software_id = self.request.query_params.get('software_id')
+        if software_id is not None:
+            try:
+                qs = qs.filter(software_id=int(software_id))
+            except ValueError:
+                pass
+        return qs
 
     def get_serializer_class(self):
         if self.action == 'create':
@@ -50,13 +60,14 @@ class DescubrimientoViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
 
         url_objetivo = serializer.validated_data['url']
+        software_id = serializer.validated_data.get('software_id')
         usuario = serializer.validated_data.get('usuario') or None
         contrasena = serializer.validated_data.get('contrasena') or None
         max_profundidad = serializer.validated_data.get('max_profundidad', 10)
         max_pasos = serializer.validated_data.get('max_pasos', 60)
 
         # 1. Crear el registro en base de datos
-        scan = DescubrimientoRepository.crear_escaneo(url=url_objetivo)
+        scan = DescubrimientoRepository.crear_escaneo(url=url_objetivo, software_id=software_id)
 
         # 2. Iniciar el escaneo asíncrono sin bloquear la respuesta
         OrquestadorDescubrimientoService.iniciar_escaneo_asincrono(
@@ -70,6 +81,7 @@ class DescubrimientoViewSet(viewsets.ModelViewSet):
 
         respuesta_data = {
             "id": str(scan.id),
+            "software_id": scan.software_id,
             "target_url": scan.target_url,
             "status": scan.status,
             "mensaje": "Escaneo iniciado exitosamente. Consulte el estado en este mismo endpoint."
@@ -86,6 +98,114 @@ class DescubrimientoViewSet(viewsets.ModelViewSet):
         observaciones = scan.observations.all()
         serializer = NetworkObservationSerializer(observaciones, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'], url_path='informe')
+    def informe(self, request):
+        """
+        GET /api/descubrimientos/informe/?software_id={id}
+        Genera un informe consolidado del descubrimiento y seguridad para un software_id determinado.
+        """
+        import logging
+        import uuid
+        from django.conf import settings
+        from django.utils import timezone
+        from backend_genvulnai.domain.enums import EstadoEscaneo
+        from backend_genvulnai.models import AttackSession, AttackTurn
+
+        software_id = request.query_params.get('software_id')
+        queryset = DiscoveryScan.objects.all().select_related('ai_channel').prefetch_related('observations', 'attack_sessions__turns')
+
+        if software_id is not None:
+            try:
+                software_id_int = int(software_id)
+                queryset = queryset.filter(software_id=software_id_int)
+            except ValueError:
+                return Response(
+                    {"error": "El parámetro software_id debe ser un número entero válido."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        escaneos = list(queryset.order_by('-created_at'))
+
+        # Canales descubiertos
+        canales_descubiertos = []
+        for s in escaneos:
+            if hasattr(s, 'ai_channel') and s.ai_channel:
+                canales_descubiertos.append({
+                    "scan_id": str(s.id),
+                    "channel_type": s.ai_channel.channel_type,
+                    "protocol": s.ai_channel.protocol,
+                    "url": s.ai_channel.url,
+                    "method": s.ai_channel.method,
+                    "confidence": s.ai_channel.confidence
+                })
+
+        # Sesiones de ataque asociadas a estos escaneos
+        scan_ids = [s.id for s in escaneos]
+        sesiones_ataque = list(AttackSession.objects.filter(scan_id__in=scan_ids).prefetch_related('turns'))
+
+        hallazgos_vulnerabilidad = []
+        puntaje_vulnerabilidad_maximo = 0
+        evaluaciones_exitosas = 0
+
+        for sesion in sesiones_ataque:
+            if sesion.exito:
+                evaluaciones_exitosas += 1
+            if sesion.puntaje_maximo > puntaje_vulnerabilidad_maximo:
+                puntaje_vulnerabilidad_maximo = sesion.puntaje_maximo
+
+            for turno in sesion.turns.all():
+                if turno.fuga_detectada or (turno.puntaje_j1 and turno.puntaje_j1 >= 7):
+                    hallazgos_vulnerabilidad.append({
+                        "session_id": str(sesion.id),
+                        "numero_turno": turno.numero_turno,
+                        "tactica_usada": turno.tactica_usada,
+                        "puntaje_juez": turno.puntaje_j1,
+                        "justificacion": turno.justificacion_j1,
+                        "fragmentos_fuga": turno.fragmentos_fuga
+                    })
+
+        # Buscar el último escaneo completado
+        ultimo_escaneo_completado = next((s for s in escaneos if s.status == EstadoEscaneo.COMPLETADO), None)
+        canal_obj = getattr(ultimo_escaneo_completado, 'ai_channel', None) if ultimo_escaneo_completado else None
+
+        canal_data = None
+        if canal_obj:
+            canal_data = AIChannelSerializer(canal_obj).data
+
+        # Observaciones relevantes sanitizadas
+        observaciones_relevantes = []
+        if ultimo_escaneo_completado:
+            obs_qs = ultimo_escaneo_completado.observations.filter(contains_marker=True)[:20]
+            if not obs_qs.exists():
+                obs_qs = ultimo_escaneo_completado.observations.all()[:20]
+            observaciones_relevantes = NetworkObservationSerializer(obs_qs, many=True).data
+
+        escaneos_serializer = DiscoveryScanListSerializer(escaneos, many=True)
+        sesiones_ataque_serializer = AttackSessionDetailSerializer(sesiones_ataque, many=True)
+
+        informe_data = {
+            "software_id": int(software_id) if software_id is not None else None,
+            "fecha_generacion": timezone.now().isoformat(),
+            "resumen": {
+                "total_escaneos": len(escaneos),
+                "escaneos_completados": sum(1 for s in escaneos if s.status == EstadoEscaneo.COMPLETADO),
+                "escaneos_fallidos": sum(1 for s in escaneos if s.status == EstadoEscaneo.FALLIDO),
+                "canales_ia_identificados": len(canales_descubiertos),
+                "total_evaluaciones_ataque": len(sesiones_ataque),
+                "evaluaciones_exitosas_vulnerables": evaluaciones_exitosas,
+                "puntaje_vulnerabilidad_maximo": puntaje_vulnerabilidad_maximo
+            },
+            "ultimo_escaneo": DiscoveryScanDetailSerializer(escaneos[0]).data if escaneos else None,
+            "canales_descubiertos": canales_descubiertos,
+            "hallazgos_vulnerabilidad": hallazgos_vulnerabilidad,
+            "sesiones_ataque": sesiones_ataque_serializer.data,
+            "canal_ia_detectado": canal_data,
+            "observaciones_relevantes": observaciones_relevantes,
+            "escaneos": escaneos_serializer.data
+        }
+
+        return Response(informe_data, status=status.HTTP_200_OK)
 
 
 class AttackSessionViewSet(viewsets.ModelViewSet):

@@ -20,6 +20,12 @@ class IniciarEscaneoSerializer(serializers.Serializer):
         required=True,
         help_text="URL de la aplicación objetivo (ej. http://localhost:3000)"
     )
+    software_id = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        default=None,
+        help_text="ID opcional del Software asociado en el módulo de pruebas"
+    )
     usuario = serializers.CharField(
         required=False,
         allow_blank=True,
@@ -128,6 +134,7 @@ class DiscoveryScanListSerializer(serializers.ModelSerializer):
         model = DiscoveryScan
         fields = [
             'id',
+            'software_id',
             'target_url',
             'status',
             'ia_habilitada',
@@ -147,6 +154,7 @@ class DiscoveryScanDetailSerializer(serializers.ModelSerializer):
         model = DiscoveryScan
         fields = [
             'id',
+            'software_id',
             'target_url',
             'status',
             'marcador',
@@ -262,9 +270,9 @@ class AttackSessionListSerializer(serializers.ModelSerializer):
 class AttackSessionDetailSerializer(serializers.ModelSerializer):
     """
     Serializador detallado para una sesión de ataque.
-    En lugar de duplicar todos los turnos (disponibles en /api/ataques/{id}/turnos/),
-    expone únicamente los turnos exitosos / notables (puntaje >= 6, fuga detectada o clasificación de éxito).
+    Expone los turnos ejecutados y los turnos exitosos.
     """
+    turns = AttackTurnSerializer(many=True, read_only=True)
     turnos_exitosos = serializers.SerializerMethodField()
     total_turnos_exitosos = serializers.SerializerMethodField()
 
@@ -279,6 +287,7 @@ class AttackSessionDetailSerializer(serializers.ModelSerializer):
             'status',
             'puntaje_maximo',
             'exito',
+            'turns',
             'total_turnos_exitosos',
             'turnos_exitosos',
             'persistencia_habilitada',

@@ -136,7 +136,7 @@ REST_FRAMEWORK = {
 # Configuración personalizada de Descubrimiento de IA y Seguridad
 ALLOWED_TARGET_HOSTS = env.list(
     'ALLOWED_TARGET_HOSTS', 
-    default=['localhost', '127.0.0.1']
+    default=['localhost', '127.0.0.1', 'devtunnels.ms', '*.devtunnels.ms', '*']
 )
 ALLOWED_TARGET_URLS = env.list(
     'ALLOWED_TARGET_URLS',

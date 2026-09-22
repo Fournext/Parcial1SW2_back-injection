@@ -26,6 +26,12 @@ class DiscoveryScan(models.Model):
         editable=False,
         help_text="Identificador único del escaneo"
     )
+    software_id = models.BigIntegerField(
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="ID del Software objetivo asociado en el módulo de pruebas (Logical FK)"
+    )
     target_url = models.URLField(
         max_length=2048,
         help_text="URL de la aplicación objetivo analizada"

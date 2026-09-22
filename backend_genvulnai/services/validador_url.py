@@ -85,6 +85,20 @@ class ValidadorURLService:
         if hostname in hosts_permitidos:
             return True, url_limpia
 
+        # A.2. Coincidencia por subdominio o sufijo comodín (ej. '*.devtunnels.ms' o 'devtunnels.ms')
+        for entrada in hosts_permitidos:
+            if entrada.startswith('*.'):
+                base_domain = entrada[2:].lower()
+                if hostname == base_domain or hostname.endswith('.' + base_domain):
+                    return True, url_limpia
+            elif entrada.startswith('.'):
+                if hostname.endswith(entrada.lower()):
+                    return True, url_limpia
+            elif '.' in entrada and not entrada.startswith('http'):
+                # Si se ingresó 'devtunnels.ms' autoriza subdominios como 'xxx.devtunnels.ms'
+                if hostname == entrada.lower() or hostname.endswith('.' + entrada.lower()):
+                    return True, url_limpia
+
         # B. Coincidencia por 'hostname:puerto' (ej. 'localhost:3000' o '127.0.0.1:8080')
         netloc = parsed.netloc.lower()
         if netloc in hosts_permitidos:
